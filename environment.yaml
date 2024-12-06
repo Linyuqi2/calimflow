@@ -1,0 +1,22 @@
+
+# Environment file for calimflow
+
+# run:
+#   conda env create -f environment.yaml
+#   conda activate calimflow
+  
+
+name: calimflow
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.10
+  - pip
+  - pip:
+    - -e .  
+    - pytest>=7.0
+    - pytest-cov
+    - black
+    - isort
+    - mypy 
