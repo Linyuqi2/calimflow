@@ -12,6 +12,7 @@ channels:
   - defaults
 dependencies:
   - python=3.10
+  - jupyter
   - pip
   - pip:
     - -e .  
