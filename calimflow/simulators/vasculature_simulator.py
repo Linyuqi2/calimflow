@@ -1109,7 +1109,7 @@ class VasculatureSimulator:
                     np.random.normal(self.vasc_params._ves_size[2], self.vasc_params._ves_size[3]),
                 )
 
-    def plot_vasculature(self, save_path: str = None, show: bool = True) -> None:
+    def plot_vasculature(self, save_path: str = None, show: bool = False) -> None:
         """
         Plot the vasculature network with vessels as curves.
 
@@ -1157,7 +1157,10 @@ class VasculatureSimulator:
                     linewidth=linewidth,
                 )
 
-        print(vessel_nums)
+        print(f"Vessel counts:")
+        print(f" - Surface vessels: {int(vessel_nums[0])}")
+        print(f" - Vertical vessels: {int(vessel_nums[1])}")
+        print(f" - Capillaries: {int(vessel_nums[2])}")
 
         # Enhance plot appearance
         ax.set_title("Vasculature Network", fontsize=14, pad=20)
@@ -1204,7 +1207,7 @@ class VasculatureSimulator:
         else:
             plt.close()
 
-    def vessel_network_to_json(self):
+    def vessel_network_to_json(self) -> str:
         """
         Convert vessel network data to JSON format suitable for Three.js visualization.
 
@@ -1262,7 +1265,7 @@ class VasculatureSimulator:
 
         return json.dumps(vessel_data)
 
-    def save_vessel_network(self, filepath):
+    def save_vessel_network(self, save_path: str) -> None:
         """
         Save vessel network data to JSON file.
 
@@ -1270,5 +1273,5 @@ class VasculatureSimulator:
             filepath: Path to save the JSON file
         """
         json_data = self.vessel_network_to_json()
-        with open(filepath, "w") as f:
+        with open(save_path, "w") as f:
             f.write(json_data)

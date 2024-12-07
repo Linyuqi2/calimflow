@@ -92,7 +92,11 @@
         // Create a tube geometry for a vessel
         function createVesselTube(path, radius) {
             const curve = new THREE.CatmullRomCurve3(
-                path.map(point => new THREE.Vector3(point[0], point[2], point[1])) // Note: Y and Z swapped
+                path.map(point => new THREE.Vector3(
+                    point[0], 
+                    -point[2],  // Negative Y to invert the axis
+                    point[1]
+                ))
             );
             
             const tubeGeometry = new THREE.TubeGeometry(

@@ -22,7 +22,8 @@ def test_vasculature_simulator():
     neur_ves, neur_ves_all = vas_simulator.simulate()
 
     # Plot using the new method
-    vas_simulator.plot_vasculature(save_path="vasculature.png", show=True)
+    vas_simulator.plot_vasculature(save_path="../visualization/images/vasculature.png")
+    vas_simulator.save_vessel_network(save_path="../visualization/data/vasculature.json")
 
     end_time = time.time()
     print(f"Time taken: {end_time - start_time:.2f} seconds.")

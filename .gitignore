@@ -3,4 +3,5 @@ __pycache__/
 .idea/
 .ipynb_checkpoints/
 visualization/data/*.json
+visualization/images/*.png
 tests/notebooks/*.ipynb
