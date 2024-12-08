@@ -7,6 +7,7 @@ import random
 import copy
 import json
 import matplotlib.pyplot as plt
+import os
 
 from ..models.parameters import VolumeParams, VascParams, NodeParams
 from ..models.structures import Node, Connection
@@ -944,7 +945,7 @@ class VasculatureSimulator:
                         capp_mat[i, j] = np.inf
                         capp_mat[j, i] = np.inf
 
-        print("End vessel intersection processing")
+        print("Done vessel intersection processing")
 
         # Main connection loop
         while True:
@@ -1099,7 +1100,7 @@ class VasculatureSimulator:
 
             to_connect = to_connect[1:]
 
-        print("End weight processing")
+        print("Done weight processing")
 
         # Set remaining weights
         for i in range(self.vasc_params._nconn):
@@ -1199,6 +1200,8 @@ class VasculatureSimulator:
 
         # Save figure if path provided
         if save_path:
+            # Create directory if it doesn't exist
+            os.makedirs(os.path.dirname(save_path), exist_ok=True)
             plt.savefig(save_path, dpi=300, bbox_inches="tight")
 
         # Show plot if requested
@@ -1272,6 +1275,9 @@ class VasculatureSimulator:
         Args:
             filepath: Path to save the JSON file
         """
+        # Create directory if it doesn't exist
+        os.makedirs(os.path.dirname(save_path), exist_ok=True)
+        
         json_data = self.vessel_network_to_json()
         with open(save_path, "w") as f:
             f.write(json_data)
