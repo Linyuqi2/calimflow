@@ -51,6 +51,8 @@
             vertical: new THREE.Group(),
             capillary: new THREE.Group()
         };
+        let autoRotate = false;
+        let rotationSpeed = 0.005;
 
         // Initialize scene
         function init() {
@@ -154,8 +156,34 @@
         function loadVesselDataFromJson(data) {
             const counts = { surface: 0, vertical: 0, capillary: 0 };
 
+            // Calculate the center of all vessel points
+            let minX = Infinity, minY = Infinity, minZ = Infinity;
+            let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
+            
             data.vessels.forEach(vessel => {
-                const geometry = createVesselTube(vessel.path, vessel.radius);
+                vessel.path.forEach(point => {
+                    minX = Math.min(minX, point[0]);
+                    maxX = Math.max(maxX, point[0]);
+                    minY = Math.min(minY, point[2]); // Note: Y and Z are swapped in visualization
+                    maxY = Math.max(maxY, point[2]);
+                    minZ = Math.min(minZ, point[1]);
+                    maxZ = Math.max(maxZ, point[1]);
+                });
+            });
+
+            const centerX = (minX + maxX) / 2;
+            const centerY = (minY + maxY) / 2;
+            const centerZ = (minZ + maxZ) / 2;
+
+            // Create vessels with centered coordinates
+            data.vessels.forEach(vessel => {
+                const centeredPath = vessel.path.map(point => [
+                    point[0] - centerX,
+                    point[1] - centerZ,  // Note: Y and Z are swapped in visualization
+                    point[2] - centerY
+                ]);
+                
+                const geometry = createVesselTube(centeredPath, vessel.radius);
                 const material = new THREE.MeshPhongMaterial({
                     color: new THREE.Color(...vessel.color),
                     transparent: vessel.type === 'capillary',
@@ -199,6 +227,18 @@
         function setupGUI() {
             const gui = new GUI();
             
+            gui.add({ autoRotate: false }, 'autoRotate')
+                .name('Auto Rotate')
+                .onChange(value => {
+                    autoRotate = value;
+                });
+            
+            gui.add({ rotationSpeed: 0.005 }, 'rotationSpeed', 0.001, 0.02)
+                .name('Rotation Speed')
+                .onChange(value => {
+                    rotationSpeed = value;
+                });
+            
             const visibilityFolder = gui.addFolder('Visibility');
             Object.entries(vesselGroups).forEach(([key, group]) => {
                 visibilityFolder.add(group, 'visible').name(key);
@@ -226,6 +266,11 @@
 
         function animate() {
             requestAnimationFrame(animate);
+            
+            if (autoRotate) {
+                scene.rotation.y += rotationSpeed;
+            }
+            
             controls.update();
             renderer.render(scene, camera);
         }
