@@ -21,13 +21,8 @@ classifiers = [
     "Programming Language :: Python :: 3.9",
     "Topic :: Scientific/Engineering :: Bio-Informatics",
 ]
-dependencies = [
-    "numpy",
-    "scipy",
-    "matplotlib",
-    "scikit-image",
-    "tqdm",
-]
+# Minimal dependencies for pip install (conda will handle the full set)
+dependencies = []
 
 [project.optional-dependencies]
 dev = [

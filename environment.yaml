@@ -1,4 +1,3 @@
-
 # Environment file for calimflow
 
 # run:
@@ -14,10 +13,18 @@ dependencies:
   - python=3.10
   - jupyter
   - pip
+  # Core dependencies
+  - numpy
+  - scipy
+  - matplotlib
+  - scikit-image
+  - tqdm
+  # Development dependencies
+  - pytest>=7.0
+  - pytest-cov
+  - black
+  - isort
+  - mypy
+  - cupy
   - pip:
-    - -e .  
-    - pytest>=7.0
-    - pytest-cov
-    - black
-    - isort
-    - mypy 
+    - -e .
