@@ -61,3 +61,19 @@ def create_disk_structure(radius: int) -> np.ndarray:
     y, x = np.ogrid[-radius:radius+1, -radius:radius+1]
     disk = x**2 + y**2 <= radius**2
     return disk
+
+def spiral_sample_sphere(n_samples: int, return_triangulation: bool = True) -> Tuple[np.ndarray, Optional[np.ndarray]]:
+    """
+    Sample points uniformly on a sphere using spiral method.
+    
+    Args:
+        n_samples: Number of points to sample
+        return_triangulation: Whether to return triangulation indices
+        
+    Returns:
+        Tuple containing:
+            - vertices: (n_samples, 3) array of point coordinates
+            - triangulation: Array defining surface mesh triangles (if return_triangulation=True)
+                           None otherwise
+    """
+    pass

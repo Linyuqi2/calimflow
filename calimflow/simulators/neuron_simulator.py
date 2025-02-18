@@ -3,12 +3,20 @@ import numpy as np
 from scipy import ndimage
 from scipy.spatial import ConvexHull
 from scipy.interpolate import CubicSpline
+import copy
 
 from ..models.parameters import (
     VolumeParams, NeuronParams, DendriteParams, NeuralVolume, NeuronBody
 )
-from ..utils.geometry import rotation_matrix, teardrop_projection
-from ..utils.mesh import spiral_sample_sphere, in_triangulation
+from ..utils.geometry import (
+    rotation_matrix,
+    teardrop_projection,
+    create_disk_structure
+)
+from ..utils.mesh import (
+    spiral_sample_sphere,
+    in_triangulation
+)
 
 class NeuronSimulator:
     def __init__(
@@ -20,24 +28,47 @@ class NeuronSimulator:
         axon_params: Optional[Dict] = None
     ):
         """Initialize NeuronSimulator."""
-        self.vol_params = vol_params
-        self.neur_params = neur_params
-        self.dend_params = dend_params
+        # Store deep copies of parameters to avoid modifying originals
+        self.vol_params = copy.deepcopy(vol_params)
+        self.neur_params = copy.deepcopy(neur_params)
+        self.dend_params = copy.deepcopy(dend_params)
         self.bg_params = bg_params or {'flag': False}
         self.axon_params = axon_params or {'flag': False}
         self.neuron_bodies: List[NeuronBody] = []
-        
-        # Convert list parameters to numpy arrays
-        self.vol_params.vol_sz = np.array(self.vol_params.vol_sz)
-        self.dend_params.dt_params = np.array(self.dend_params.dt_params)
-        self.dend_params.at_params = np.array(self.dend_params.at_params)
-        self.dend_params.dims = np.array(self.dend_params.dims)
-        self.dend_params.dims_ss = np.array(self.dend_params.dims_ss)
 
-    def sample_locations(self, neur_ves: np.ndarray) -> np.ndarray:
+        # Calculate runtime parameters
+        # Volume parameters
+        self.vol_params._size = np.ceil(self.vol_params.size * self.vol_params.res).astype(int)
+        self.vol_params._depth = np.ceil(self.vol_params.depth * self.vol_params.res)
+        
+        # Dendrite parameters
+        self.dend_params.dt_params = self.dend_params.dt_params * self.vol_params.res
+        self.dend_params.at_params = self.dend_params.at_params * self.vol_params.res
+        self.dend_params.thickness_scale = self.dend_params.thickness_scale * self.vol_params.res * self.vol_params.res
+        
+        # Calculate number of neurons based on volume size (1 neuron per 1000 cubic microns)
+        vol_size_um = np.prod(self.vol_params.size)
+        self.n_neurons = max(1, int(vol_size_um / 1000))
+        
+        # Calculate minimum distance between neurons (in pixels)
+        self.min_dist = 15 * self.vol_params.res  # 15 microns minimum distance
+
+    def sample_locations(self, vessel_volume: np.ndarray) -> np.ndarray:
         """Sample neuron locations avoiding vessels."""
-        neur_locs, v_cell, v_nuc, tri = self._sample_dense_neurons(neur_ves)
+        # Convert vessel volume to match full volume size if needed
+        if vessel_volume.shape != tuple(self.vol_params._size):
+            vessel_volume = np.zeros(tuple(self.vol_params._size), dtype=bool)
+            
+        # Generate neuron locations using _sample_dense_neurons
+        neur_locs, v_cell, v_nuc, tri, _ = self._sample_dense_neurons(
+            vessel_volume,
+            self.n_neurons,
+            self.min_dist
+        )
+        
+        # Store generated neuron bodies
         self._store_neuron_bodies(neur_locs, v_cell, v_nuc, tri)
+        
         return neur_locs
 
     def generate_neurons(
@@ -122,17 +153,17 @@ class NeuronSimulator:
 
     def _sample_dense_neurons(
         self,
-        neur_params: Dict,
-        vol_params: Dict,
-        neur_ves: np.ndarray
+        vessel_volume: np.ndarray,
+        n_neurons: int,
+        min_dist: float
     ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         """
         Sample shapes and locations for all somas in a volume.
         
         Args:
-            neur_params: Parameters for neuron generation
-            vol_params: Parameters for volume generation
-            neur_ves: Array delineating areas occupied by vasculature
+            vessel_volume: Array delineating areas occupied by vasculature
+            n_neurons: Number of neurons to sample
+            min_dist: Minimum distance between neurons (in pixels)
             
         Returns:
             neur_locs: Kx3 array of 3D locations for all K neurons
@@ -145,46 +176,46 @@ class NeuronSimulator:
         
         # Create exclusion zone around vessels
         x, y, z = np.meshgrid(
-            np.arange(-np.ceil(vol_params['min_dist']/2), np.ceil(vol_params['min_dist']/2)+1),
-            np.arange(-np.ceil(vol_params['min_dist']/2), np.ceil(vol_params['min_dist']/2)+1),
-            np.arange(-np.ceil(vol_params['min_dist']/2), np.ceil(vol_params['min_dist']/2)+1)
+            np.arange(-np.ceil(min_dist/2), np.ceil(min_dist/2)+1),
+            np.arange(-np.ceil(min_dist/2), np.ceil(min_dist/2)+1),
+            np.arange(-np.ceil(min_dist/2), np.ceil(min_dist/2)+1)
         )
-        se = np.sqrt(x**2 + y**2 + z**2) <= vol_params['min_dist']/2
-        neur_ves_trunc = ndimage.binary_dilation(neur_ves, structure=se)
+        se = np.sqrt(x**2 + y**2 + z**2) <= min_dist/2
+        neur_ves_trunc = ndimage.binary_dilation(vessel_volume, structure=se)
         
         # Sample sphere for mesh generation
-        v_samp, tri = spiral_sample_sphere(neur_params['n_samps'])
-        neur_params['S_samp'] = v_samp
-        neur_params['Tri'] = tri
+        v_samp, tri = spiral_sample_sphere(self.neur_params.n_samps)
+        self.neur_params.S_samp = v_samp
+        self.neur_params.Tri = tri
         
         # Initialize storage
         v_cell = []
         v_nuc = []
         rot_ang = []
-        vol_sz = vol_params['vol_sz']
+        vol_sz = self.vol_params._size
         
         # Create volume meshgrid
         mesh_x, mesh_y, mesh_z = np.meshgrid(
-            np.linspace(0, vol_sz[0], int(vol_sz[0] * vol_params['vres'])),
-            np.linspace(0, vol_sz[1], int(vol_sz[1] * vol_params['vres'])),
-            np.linspace(0, vol_sz[2], int(vol_sz[2] * vol_params['vres'])),
+            np.linspace(0, vol_sz[0], int(vol_sz[0] * self.vol_params.res)),
+            np.linspace(0, vol_sz[1], int(vol_sz[1] * self.vol_params.res)),
+            np.linspace(0, vol_sz[2], int(vol_sz[2] * self.vol_params.res)),
             indexing='ij'
         )
         
         # Get valid volume region
-        vol_depth = vol_params['vol_depth'] * vol_params['vres']
-        idx_good = ~neur_ves_trunc[:, :, int(1+vol_depth):int(vol_depth+vol_sz[2]*vol_params['vres'])]
+        vol_depth = self.vol_params._depth
+        idx_good = ~neur_ves_trunc[:, :, :int(vol_sz[2]*self.vol_params.res)]
         idx_bad = idx_good.copy()
         
         # Sample neuron locations
         neur_locs = np.array([[np.inf, np.inf, np.inf]])
         k = 0
         
-        while idx_good.any() and (len(v_cell) < vol_params['N_neur']):
+        while idx_good.any() and (len(v_cell) < n_neurons):
             k += 1
             
             # Generate neural body
-            v_tmp, v_nuc_tmp, _, rot_ang_tmp = self._generate_neural_body(neur_params)
+            v_tmp, v_nuc_tmp, _, rot_ang_tmp = self._generate_neural_body(self.neur_params)
             v_cell.append(v_tmp)
             v_nuc.append(v_nuc_tmp)
             rot_ang.append(rot_ang_tmp)
@@ -202,8 +233,8 @@ class NeuronSimulator:
             ])
             
             # Center single neuron volumes if requested
-            if vol_params['N_neur'] == 1:
-                new_pt = np.round(vol_params['vol_sz'] / 2)
+            if n_neurons == 1:
+                new_pt = np.round(vol_sz / 2)
             
             # Update exclusion zones
             tmp_dist = np.min(np.sqrt(np.sum((new_pt - neur_locs)**2, axis=1)))
@@ -215,8 +246,8 @@ class NeuronSimulator:
                 (mesh_y - new_pt[1])**2 +
                 (mesh_z - new_pt[2])**2
             )
-            idx_good[dist_mask <= eta * vol_params['min_dist']] = False
-            idx_bad[dist_mask <= vol_params['min_dist']] = False
+            idx_good[dist_mask <= eta * min_dist] = False
+            idx_bad[dist_mask <= min_dist] = False
             idx_good = ~(idx_good | ~idx_bad)
         
         # Format outputs
@@ -233,149 +264,125 @@ class NeuronSimulator:
             v_nuc[i] += neur_locs[i]
         
         return neur_locs, v_cell, v_nuc, tri, rot_ang
-    
+
     def _generate_neural_body(
         self,
-        neur_params: Dict
-    ) -> Tuple[np.ndarray, np.ndarray, Optional[np.ndarray], np.ndarray]:
-        """
-        Generate soma and nucleus shapes for a single neuron using Gaussian processes.
-        
-        Args:
-            neur_params: Parameters for neuron generation
-            
-        Returns:
-            v_cell: Vertices defining soma shape
-            v_nuc: Vertices defining nucleus shape
-            tri: Triangulation for surface mesh
-            rot_ang: Rotation angles of cell
-        """
-        # Get or generate sphere sampling
-        if ('S_samp' not in neur_params or neur_params['S_samp'] is None or
-            'Tri' not in neur_params or neur_params['Tri'] is None):
-            v_samp, tri = spiral_sample_sphere(neur_params['n_samps'])
+        neur_params: NeuronParams
+    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        """Generate neural body shape using Gaussian process on sphere."""
+        # Constants
+        pwr = 1  # GP power (sensitive parameter)
+        nuc_off = 3  # Nucleus offset
+
+        # Get sphere sampling using mesh utility
+        if not hasattr(neur_params, 'S_samp') or not hasattr(neur_params, 'Tri'):
+            v_samp, tri = spiral_sample_sphere(neur_params.n_samps)
+            neur_params.S_samp = v_samp
+            neur_params.Tri = tri
         else:
-            v_samp = neur_params['S_samp']
-            tri = neur_params['Tri']
-        
-        # Calculate covariance based on distances
-        if neur_params['neur_type'] == 'pyr':
+            v_samp = neur_params.S_samp
+            tri = neur_params.Tri
+
+        # Calculate teardrop projection using geometry utility
+        if neur_params.neur_type == 'pyr':
             v_tear = teardrop_projection(v_samp, 1)
-        elif neur_params['neur_type'] == 'peanut':
+        elif neur_params.neur_type == 'peanut':
             v_tear = teardrop_projection(v_samp, 2)
         else:
             v_tear = v_samp.copy()
-            
-        # Calculate geodesic distances if not provided
-        if 'dists' not in neur_params or neur_params['dists'] is None:
+
+        # Calculate geodesic distances
+        if neur_params.dists is None:
             diffs = v_samp[:, np.newaxis, :] - v_samp[np.newaxis, :, :]
             dists = np.sqrt(np.sum(diffs**2, axis=2))
             dists = 2 * np.arcsin(dists/2)  # geodesic distance
-            dists = neur_params['p_scale'] * np.exp(
-                -(dists/neur_params['l_scale'])**1
-            )
-        else:
-            dists = neur_params['dists']
-            dists = neur_params['p_scale'] * np.exp(
-                -(dists/neur_params['l_scale'])**1
-            )
-            
-        # Generate teardrop radii
-        if 'Rtear' not in neur_params or neur_params['Rtear'] is None:
-            if neur_params['neur_type'] == 'pyr':
-                r_tear = np.sqrt(np.sum(v_tear**2, axis=1))
-            elif neur_params['neur_type'] == 'peanut':
-                r_tear = np.sqrt(np.sum(v_tear**2, axis=1))
-            else:
-                r_tear = 1
-        else:
-            r_tear = neur_params['Rtear']
-            
+            neur_params.dists = dists
+
+        dists = neur_params.p_scale * np.exp(-(neur_params.dists/neur_params.l_scale)**pwr)
+
         # Ensure positive definite covariance
-        min_eig = np.linalg.eigvalsh(dists)[0]
+        min_eig = np.linalg.eigvalsh(dists)[0] * 1.03
         if min_eig < 0:
             dists = dists + abs(min_eig) * np.eye(dists.shape[0])
-            
-        # Sample from Gaussian process
-        x_bounds = neur_params['exts'] * neur_params['avg_rad']
-        x_base = np.abs(np.random.multivariate_normal(
-            np.zeros_like(r_tear), dists
-        ))
-        x = x_base - np.mean(x_base) + neur_params['avg_rad'] * r_tear
-        
+
+        # Generate shapes using GP
+        exts = np.array([0.8, 1.2])  # Define extent ratios for soma size if not provided
+        x_bounds = exts * neur_params.avg_rad
+        x_base = np.abs(np.random.multivariate_normal(np.zeros(len(v_tear)), dists))
+        x = x_base - np.mean(x_base) + neur_params.avg_rad
+
         # Normalize radii
         x_min = min(np.min(x), x_bounds[0])
-        x = (x_bounds[1] - x_bounds[0]) * (x - x_min) / (
-            max(np.max(x), x_bounds[1]) - x_min
-        ) + x_bounds[0]
-        
-        # Create nucleus shape
-        if neur_params['neur_type'] == 'pyr':
-            x2 = x_base - np.mean(x_base) + neur_params['avg_rad']
+        x = (x_bounds[1] - x_bounds[0]) * (x - x_min) / (max(np.max(x), x_bounds[1]) - x_min) + x_bounds[0]
+
+        # Generate nucleus shape
+        if neur_params.neur_type == 'pyr':
+            x2 = x_base - np.mean(x_base) + neur_params.avg_rad
             x2_min = min(np.min(x2), x_bounds[0])
-            x2 = (x_bounds[1] - x_bounds[0]) * (x2 - x2_min) / (
-                max(np.max(x2), x_bounds[1]) - x2_min
-            ) + x_bounds[0]
+            x2 = (x_bounds[1] - x_bounds[0]) * (x2 - x2_min) / (max(np.max(x2), x_bounds[1]) - x2_min) + x_bounds[0]
         else:
             x2 = x.copy()
-            
+
         # Create elliptical shapes
-        eccens = 1 + neur_params['eccen'] * (
-            np.random.rand(3) - np.array([0.5, 0.5, 0])
-        )
+        eccens = 1 + neur_params.eccen * (np.random.rand(3) - np.array([0.5, 0.5, 0]))
         eccens = eccens / np.power(np.prod(eccens), 1/3)
-        
-        # Generate final shapes
-        if neur_params['neur_type'] == 'pyr':
+
+        # Generate cell shape
+        if neur_params.neur_type == 'pyr':
             v_e_tear = v_tear * eccens
             v_e_tear = v_e_tear / np.sqrt(np.mean(np.sum(v_e_tear**2, axis=1)))
         else:
             v_e_tear = v_samp * eccens
             v_e_tear = v_e_tear / np.sqrt(np.mean(np.sum(v_samp**2, axis=1)))
-            
-        # Generate cell body
+
+        # Generate final shapes
         v_cell = v_e_tear * x[:, np.newaxis]
-        v_cell = v_cell + np.array([0, 0, -3])  # nucleus offset
+        v_cell = v_cell + np.array([0, 0, -nuc_off])
         v_norms = np.sqrt(np.sum(v_cell**2, axis=1))
-        
+
         # Generate nucleus
-        v_nuc = v_samp * np.array([1, 1, -1]) * eccens * x2[:, np.newaxis]
+        v_nuc = v_samp * np.array([1, 1, -1]) * x2[:, np.newaxis]
         v_norms2 = np.sqrt(np.sum(v_nuc**2, axis=1))
-        v_norms2 = neur_params['nexts'][1] * (
-            neur_params['nexts'][0] * (v_norms2 - np.min(v_norms2)) + 
-            (1 - neur_params['nexts'][0]) * np.max(v_norms2)
-        )
-        v_norms2 = v_norms2 + np.min(v_norms - v_norms2) - neur_params['min_thic'][0]
-        v_nuc = v_nuc * (v_norms2 / np.sqrt(np.sum(v_nuc**2, axis=1)))[:, np.newaxis]
         
+        # Define nucleus extents and thickness
+        nexts = [0.7, 0.8]  # Default nucleus size parameters if not provided
+        min_thic = [1.0, 2.0]  # Default minimum thickness parameters if not provided
+        
+        # Shrink and smooth nucleus
+        v_norms2 = nexts[1] * (
+            nexts[0] * (v_norms2 - np.min(v_norms2)) + 
+            (1 - nexts[0]) * np.max(v_norms2)
+        )
+        v_norms2 = v_norms2 + np.min(v_norms - v_norms2) - min_thic[0]
+        v_nuc = v_nuc * eccens * (v_norms2 / np.sqrt(np.sum(v_nuc**2, axis=1)))[:, np.newaxis]
+
         # Apply lateral shift to nucleus
         lat_ang = np.random.rand() * 2 * np.pi
-        lat_shift = (1 - abs(np.random.rand() - np.random.rand())) * neur_params['min_thic'][1]
+        lat_shift = (1 - abs(np.random.rand() - np.random.rand())) * min_thic[1]
         lat_shift = lat_shift * np.array([np.sin(lat_ang), np.cos(lat_ang)])
-        
-        # Final position adjustments
-        v_cell = v_cell + np.array([0, 0, 3])
-        v_nuc = v_nuc + np.array([lat_shift[0], lat_shift[1], 3])
-        
-        # Optional nucleus scaling
-        if 'nuc_rad' in neur_params and neur_params['nuc_rad'] is not None:
+
+        # Apply final offsets
+        v_cell = v_cell + np.array([0, 0, nuc_off])
+        v_nuc = v_nuc + np.array([lat_shift[0], lat_shift[1], nuc_off])
+
+        # Optional nucleus size scaling
+        if hasattr(neur_params, 'nuc_rad') and neur_params.nuc_rad is not None:
             hull = ConvexHull(v_nuc)
-            nuc_sz = (4/3) * np.pi * (neur_params['nuc_rad'][0]**3)
-            if len(neur_params['nuc_rad']) > 1:
-                v_nuc = v_nuc * ((nuc_sz/hull.volume)**(1/3))**(1/neur_params['nuc_rad'][1])
+            nuc_sz = (4/3) * np.pi * (neur_params.nuc_rad[0]**3)
+            if len(neur_params.nuc_rad) > 1:
+                v_nuc = v_nuc * (((nuc_sz/hull.volume)**(1/3))**(1/neur_params.nuc_rad[1]))
             else:
                 v_nuc = v_nuc * (nuc_sz/hull.volume)**(1/3)
-        
-        # Generate rotation angles
-        max_ang = neur_params.get('max_ang', 20)
+
+        # Apply rotations using geometry utility
+        max_ang = 20  # Default maximum angle if not provided
         rot_ang = -abs(max_ang) + 2 * abs(max_ang) * np.random.rand(3)
         
-        # Apply rotations
         for ang, axis in zip(rot_ang, range(3)):
             R = rotation_matrix(ang, axis)
             v_nuc = v_nuc @ R
             v_cell = v_cell @ R
-            
+
         return v_cell, v_nuc, tri, rot_ang
 
     def _store_neuron_bodies(
@@ -398,53 +405,52 @@ class NeuronSimulator:
 
     def _generate_neural_volume(
         self,
-        neur_params: Dict,
-        vol_params: Dict,
         neur_locs: np.ndarray,
         v_cell: np.ndarray,
         v_nuc: np.ndarray,
         neur_ves: Optional[np.ndarray] = None
-    ) -> NeuralVolume:
+    ) -> Tuple[np.ndarray, np.ndarray, List[Tuple[np.ndarray, float]], List[np.ndarray]]:
         """
         Place neural soma in volume and generate fluorescence values.
         
         Args:
-            neur_params: Parameters for neuron generation
-            vol_params: Parameters for volume generation
             neur_locs: Nx3 array of neuron locations
             v_cell: Surface points of cell somas
             v_nuc: Surface points of cell nuclei
             neur_ves: Binary array indicating blood vessel locations
             
         Returns:
-            NeuralVolume object containing soma locations and fluorescence
+            neur_soma: Binary volume indicating soma locations
+            neur_vol: Volume containing fluorescence levels
+            gp_nuc: List of nucleus indices and fluorescence values
+            gp_soma: List of soma indices
         """
-        if vol_params.get('verbose', 0) >= 1:
+        if self.vol_params.verbose >= 1:
             print('Setting up volume...', end='')
             
         # Initialize volume arrays
-        vol_sz = np.array(vol_params['vol_sz'])
-        vres = vol_params['vres']
+        vol_sz = self.vol_params._size
+        vres = self.vol_params.res
         full_size = tuple(vol_sz * vres)
         
         neur_soma = np.zeros(full_size, dtype=np.uint16)
         neur_vol = np.zeros(full_size, dtype=np.float32)
-        gp_nuc = [(None, None) for _ in range(vol_params['N_neur'])]
-        gp_soma = [None for _ in range(vol_params['N_neur'])]
+        gp_nuc = [(None, None) for _ in range(len(neur_locs))]
+        gp_soma = [None for _ in range(len(neur_locs))]
         
         # Setup volume boundaries
         taken_pts = neur_ves if neur_ves is not None else np.zeros(full_size, dtype=bool)
-        vol_depth = int(vol_params['vol_depth'] * vres)
+        vol_depth = int(self.vol_params.depth * vres)
         taken_pts = taken_pts[:, :, vol_depth:vol_depth + int(vol_sz[2]*vres)]
         
         # Get sphere triangulation
-        _, tri = spiral_sample_sphere(neur_params['n_samps'])
+        _, tri = spiral_sample_sphere(self.neur_params.n_samps)
         
-        if vol_params.get('verbose', 0) >= 1:
+        if self.vol_params.verbose >= 1:
             print('done.\nFinding interior points...')
             
         # Process each neuron
-        for k in range(vol_params['N_neur']):
+        for k in range(len(neur_locs)):
             # Calculate extent of neuron
             max_ext = np.ceil(np.max(np.sqrt(np.sum(
                 (v_cell[:, :, k] - neur_locs[k])**2, axis=1))))
@@ -509,16 +515,16 @@ class NeuronSimulator:
             nuc_mask = nuc_points > 0
             if nuc_mask.any():
                 nuc_indices = tuple(global_indices[nuc_mask].T)
-                gp_nuc[k] = (nuc_indices, neur_params['nuc_fluorsc'])
+                gp_nuc[k] = (nuc_indices, self.neur_params.nuc_fluorsc)
             
-            if vol_params.get('verbose', 0) >= 2:
-                print(f'Processed neuron {k+1}/{vol_params["N_neur"]}')
+            if self.vol_params.verbose >= 2:
+                print(f'Processed neuron {k+1}/{len(neur_locs)}')
             
-        if vol_params.get('verbose', 0) >= 1:
+        if self.vol_params.verbose >= 1:
             print('done.')
             
-        return NeuralVolume(neur_soma, neur_vol, gp_nuc, gp_soma)
-    
+        return neur_soma, neur_vol, gp_nuc, gp_soma
+
     def _grow_neuron_dendrites(
         self,
         vol_params: VolumeParams,
@@ -1382,3 +1388,804 @@ class NeuronSimulator:
                     neur_vol[proc_idx] += proc_val
                     
         return neur_vol, gp_vals, neur_num
+    def _sort_axons(
+        self,
+        gp_bgvals: List[Tuple[np.ndarray, np.ndarray]],
+        cell_pos: np.ndarray
+    ) -> List[Tuple[np.ndarray, np.ndarray]]:
+        """Sort axons into N_proc bins based on their spatial relationship to neurons.
+        
+        Args:
+            gp_bgvals: List of tuples containing (locations, values) for each axon
+            cell_pos: Array of shape (n_neurons, 3) containing neuron positions
+            
+        Returns:
+            bg_proc: List of tuples containing sorted (locations, values) for each process
+        """
+        # Calculate volume size in voxels
+        vol_sz = (self.vol_params.size * self.vol_params.res).astype(int)
+        
+        if self.vol_params.verbose > 0:
+            print('Sorting axons...')
+
+        # Initialize output list
+        N_proc = self.axon_params.N_proc
+        bg_proc = [(np.array([]), np.array([])) for _ in range(N_proc)]
+        
+        # Get number of neurons and dendrites from volume size
+        N_neur = len(cell_pos)  # Number of neurons is length of cell positions
+        N_den = int(self.vol_params.size[0] * 
+                    self.vol_params.size[1] * 
+                    self.vol_params.size[2] / 1000)  # Rough estimate of dendrites
+        
+        # If more processes than neurons + dendrites
+        if N_proc > N_neur + N_den:
+            N_comps = N_neur + N_den
+            
+            # Calculate mean position of each axon
+            gp_bgpos = np.zeros((len(gp_bgvals), 3))
+            for kk, (locs, _) in enumerate(gp_bgvals):
+                if len(locs) > 0:
+                    # Convert linear indices to 3D coordinates
+                    coords = np.unravel_index(locs, vol_sz)
+                    gp_bgpos[kk] = np.mean(np.column_stack(coords), axis=0)
+            
+            cell_pos2 = cell_pos[:N_comps]
+            
+            # Calculate distances between axons and cell bodies
+            dist_mat = np.sqrt(
+                ((cell_pos2[:, None] - gp_bgpos[None, :]) ** 2).sum(axis=2)
+            )
+            
+            # Assign closest axons to cells
+            idxlist = np.zeros(N_comps, dtype=int)
+            for ii in range(N_comps):
+                idx = np.argmin(dist_mat[ii])
+                dist_mat[:, idx] = np.inf
+                bg_proc[ii] = gp_bgvals[idx]
+                idxlist[ii] = idx
+                
+            # Randomly distribute remaining axons
+            for kk, (locs, vals) in enumerate(gp_bgvals):
+                if kk not in idxlist:
+                    index = N_comps + int((N_proc - N_comps) * np.random.random())
+                    curr_locs, curr_vals = bg_proc[index]
+                    bg_proc[index] = (
+                        np.concatenate([curr_locs, locs]) if len(curr_locs) > 0 else locs,
+                        np.concatenate([curr_vals, vals]) if len(curr_vals) > 0 else vals
+                    )
+                
+        # If fewer processes than neurons + dendrites
+        else:
+            for locs, vals in gp_bgvals:
+                index = int(np.ceil(N_proc * np.random.random())) - 1
+                curr_locs, curr_vals = bg_proc[index]
+                bg_proc[index] = (
+                    np.concatenate([curr_locs, locs]) if len(curr_locs) > 0 else locs,
+                    np.concatenate([curr_vals, vals]) if len(curr_vals) > 0 else vals
+                )
+        
+        if self.vol_params.verbose > 0:
+            print('done.')
+        
+        return bg_proc
+
+    def _generate_axons(
+        self,
+        bg_pix: np.ndarray,
+        neur_vol: np.ndarray,
+        neur_num: np.ndarray,
+        gp_vals: List[Tuple[np.ndarray, np.ndarray]],
+        gp_nuc: List[Tuple[np.ndarray, float]]
+    ) -> Tuple[np.ndarray, List[Tuple[np.ndarray, np.ndarray]], np.ndarray]:
+        """Generate axon/background processes.
+        
+        Args:
+            bg_pix: Binary array indicating available background pixels
+            neur_vol: Neural volume array
+            neur_num: Array indicating neuron assignments
+            gp_vals: List of (indices, values) for each neuron
+            gp_nuc: List of (indices, fluorescence) for each nucleus
+            
+        Returns:
+            neur_vol: Updated neural volume
+            gp_bgvals: List of (indices, values) for background processes
+            neur_num: Updated neuron assignments
+        """
+        if self.vol_params.verbose >= 1:
+            print('Generating background fluorescence...', end='')
+
+        # Remove nucleus locations from background pixels
+        for kk in range(len(gp_nuc)):
+            if gp_nuc[kk][0] is not None:
+                bg_pix[gp_nuc[kk][0]] = 0
+
+        # Calculate fill number for background processes
+        fillnum = round(
+            (self.axon_params.maxfill * 
+             self.axon_params.maxel * 
+             np.sum(bg_pix))
+        )
+
+        # Get volume dimensions
+        vol_sz = (self.vol_params.size * 
+                  self.vol_params.res).astype(int)
+        N_bg = self.vol_params.N_bg
+
+        # Initialize background values array
+        gp_bgvals = [(None, None) for _ in range(N_bg)]
+
+        # Initialize volume if needed
+        if self.vol_params.verbose > 1:
+            print('Initializing volume')
+        
+        neur_vol = np.zeros_like(neur_vol, dtype=np.float32)
+        for kk in range(len(gp_vals)):
+            if gp_vals[kk][0] is not None:
+                neur_vol[gp_vals[kk][0]] = gp_vals[kk][1]
+            if kk < len(gp_nuc) and gp_nuc[kk][0] is not None:
+                neur_vol[gp_nuc[kk][0]] = gp_nuc[kk][1]
+            if self.vol_params.verbose >= 1:
+                print('.', end='', flush=True)
+
+        if self.vol_params.verbose > 1:
+            print()
+
+        # Setup padded volume for process generation
+        padsize = self.axon_params.padsize
+        volpad = vol_sz + 2 * padsize
+
+        # Initialize cost matrix
+        M = np.random.rand(*volpad).astype(np.float32)
+        padded_bg = np.pad(bg_pix == 0, padsize, mode='constant', constant_values=False)
+        M[padded_bg] = np.finfo(np.float32).max
+
+        if self.vol_params.verbose > 1:
+            from time import time
+            start_time = time()
+
+        # Generate background processes
+        j = 0  # Process counter
+        numit2 = 0
+        nummax = 10000
+
+        while (fillnum > 0) and (j < N_bg) and (numit2 < nummax):
+            bgpts = []  # Initialize empty path
+            numit2 = 0  # Reset stuck counter
+
+            # Try to generate a valid path
+            while len(bgpts) < self.axon_params.minlength and numit2 < nummax:
+                numit2 += 1
+
+                # Generate random root point
+                root = np.random.randint(1, volpad-1, 3)
+                while M[tuple(root)] > (self.axon_params.fillweight * 
+                                      self.axon_params.maxel):
+                    root = np.random.randint(1, volpad-1, 3)
+
+                # Generate random end point
+                ends = np.clip(
+                    root + np.random.randint(
+                        -2 * self.axon_params.maxdist * self.vol_params.res,
+                        2 * self.axon_params.maxdist * self.vol_params.res + 1,
+                        3
+                    ),
+                    1, volpad-1
+                )
+
+                # Generate random walk between points
+                bgpts = self._dendrite_randomwalk2(
+                    M, root, ends,
+                    self.axon_params.distsc,
+                    self.axon_params.maxlength,
+                    self.axon_params.fillweight,
+                    self.axon_params.maxel,
+                    self.axon_params.minlength
+                )
+
+            if bgpts:  # If valid path found
+                # Generate branches
+                nbranches = max(0, round(
+                    self.axon_params.numbranches + 
+                    self.axon_params.varbranches * np.random.randn()
+                ))
+
+                # Add branches
+                for i in range(nbranches):
+                    bgpts2 = []
+                    numit = 0
+
+                    while len(bgpts2) < self.axon_params.minlength and numit < 100:
+                        numit += 1
+                        
+                        # Select random point on existing path as root
+                        root = bgpts[np.random.randint(len(bgpts))]
+                        while (root[0] in (1, volpad[0]-1) or 
+                               root[1] in (1, volpad[1]-1) or 
+                               root[2] in (1, volpad[2]-1)):
+                            root = bgpts[np.random.randint(len(bgpts))]
+
+                        # Generate random end point
+                        ends = np.clip(
+                            root + np.random.randint(
+                                -2 * self.axon_params.maxdist * self.vol_params.res,
+                                2 * self.axon_params.maxdist * self.vol_params.res + 1,
+                                3
+                            ),
+                            1, volpad-1
+                        )
+
+                        # Generate branch path
+                        bgpts2 = self._dendrite_randomwalk2(
+                            M, root, ends,
+                            self.axon_params.distsc,
+                            self.axon_params.maxlength,
+                            self.axon_params.fillweight,
+                            self.axon_params.maxel,
+                            self.axon_params.minlength
+                        )
+
+                    # Add branch points to main path
+                    if len(bgpts2) > 0:
+                        bgpts = np.vstack([bgpts, bgpts2])
+
+                # Remove padding from points
+                bgpts = bgpts - padsize
+
+                # Remove points outside volume
+                valid_mask = ~(
+                    (bgpts[:, 0] <= 0) | (bgpts[:, 0] > vol_sz[0]) |
+                    (bgpts[:, 1] <= 0) | (bgpts[:, 1] > vol_sz[1]) |
+                    (bgpts[:, 2] <= 0) | (bgpts[:, 2] > vol_sz[2])
+                )
+                bgpts = bgpts[valid_mask]
+
+                if len(bgpts) > 0:
+                    # Convert to linear indices
+                    linear_idx = np.ravel_multi_index(
+                        (bgpts[:, 0], bgpts[:, 1], bgpts[:, 2]),
+                        vol_sz
+                    )
+
+                    # Generate fluorescence values
+                    fluo_vals = (1.0 / self.axon_params.maxel) * np.ones(len(bgpts)) * (
+                        1 + self.axon_params.varfill * np.random.randn()
+                    )
+
+                    # Store values
+                    gp_bgvals[j] = (linear_idx, fluo_vals.astype(np.float32))
+                    fillnum -= len(bgpts)
+                    neur_vol.ravel()[linear_idx] += fluo_vals
+                    j += 1
+
+                if self.vol_params.verbose > 1 and j % 1000 == 0:
+                    print(f'{j} ({time() - start_time:.1f} seconds).')
+
+        # Update number of background components generated
+        self.vol_params.N_bg = j
+        gp_bgvals = gp_bgvals[:j]
+
+        if self.vol_params.verbose >= 1:
+            print('done.')
+
+        return neur_vol, gp_bgvals, neur_num
+
+    def _generate_bg_dendrites(
+        self,
+        bg_pix: np.ndarray,
+        neural_volume: NeuralVolume,
+        gp_nuc: List[Tuple[np.ndarray, float]],
+        neur_locs: Optional[np.ndarray] = None
+    ) -> Tuple[NeuralVolume, List[Tuple[np.ndarray, float, bool]], np.ndarray]:
+        """Generate background dendrites.
+        
+        Args:
+            bg_pix: Binary array indicating available background pixels
+            neural_volume: NeuralVolume object containing soma and fluorescence data
+            gp_nuc: List of (indices, fluorescence) for each nucleus
+            neur_locs: Optional array of neuron locations (in microns)
+            
+        Returns:
+            neural_volume: Updated NeuralVolume object
+            gp_vals: List of (indices, values, is_soma) for each component
+            neur_locs: Updated neuron locations
+        """
+        if self.vol_params.verbose == 1:
+            print('Generating background fluorescence.', end='')
+        elif self.vol_params.verbose > 1:
+            print('Generating background fluorescence...')
+
+        # Initialize or get neuron locations
+        if neur_locs is None:
+            neur_locs = np.array([])
+
+        # Remove nucleus locations from background pixels
+        for nuc_idx, _ in gp_nuc:
+            if nuc_idx is not None:
+                bg_pix[nuc_idx] = 0
+
+        # Get parameters
+        vres = self.vol_params.res
+        dt_params = self.dend_params.dt_params
+        thickness_scale = self.dend_params.thickness_scale
+        
+        # Scale parameters to resolution
+        dt_params[1:3] = dt_params[1:3] * vres
+        thickness_scale = thickness_scale * vres * vres
+        
+        # Get volume dimensions
+        vol_sz = (self.vol_params.size * vres).astype(int)
+
+        if self.vol_params.verbose > 1:
+            print('Initializing volume')
+
+        # Initialize volume arrays
+        neural_volume.fluorescence = np.zeros_like(neural_volume.fluorescence, dtype=np.float32)
+        
+        # Add existing fluorescence
+        for soma_idx, soma_val in neural_volume.soma_data:
+            if soma_idx is not None:
+                neural_volume.fluorescence[soma_idx] = soma_val
+        for nuc_idx, nuc_val in gp_nuc:
+            if nuc_idx is not None:
+                neural_volume.fluorescence[nuc_idx] = nuc_val
+            if self.vol_params.verbose >= 1:
+                print('.', end='', flush=True)
+
+        if self.vol_params.verbose > 1:
+            print()
+
+        # Initialize cost matrix M
+        M = np.random.rand(*vol_sz).astype(np.float32)
+        M[bg_pix == 0] = np.finfo(np.float32).max
+        M[0, :, :] = M[:, 0, :] = M[:, :, 0] = np.finfo(np.float32).max
+        M[-1, :, :] = M[:, -1, :] = M[:, :, -1] = np.finfo(np.float32).max
+
+        if self.vol_params.verbose > 1:
+            from time import time
+            start_time = time()
+
+        # Get dendrite variation parameter
+        dend_var = getattr(self.dend_params, 'dend_var', 0.25)
+
+        # Initialize volume arrays
+        idx_vol = np.zeros(vol_sz, dtype=np.uint16)
+        num_vol = np.zeros(vol_sz, dtype=np.float32)
+
+        # Set parameters
+        dt_size = np.array([dt_params[1], dt_params[1], dt_params[2]])
+        num_pts = 0
+        idx = 0
+        shift_dist = 3
+
+        # Calculate number of dendrites to generate
+        n_dends = int(((np.prod(vol_sz + 2*dt_size) / np.prod(vol_sz)) - 1) * 
+                      self.vol_params.N_neur)
+
+        # Generate dendrites
+        for j in range(n_dends):
+            dend_pts = []
+            
+            # Generate root point outside volume
+            root = np.floor(np.random.rand(3) * (vol_sz + 2*dt_size) - dt_size)
+            while (0 < root[0] < vol_sz[0] and 
+                   0 < root[1] < vol_sz[1] and 
+                   0 < root[2] < vol_sz[2]):
+                root = np.floor(np.random.rand(3) * (vol_sz + 2*dt_size) - dt_size)
+            
+            # Add root to neuron locations
+            neur_locs = np.vstack([neur_locs, root/vres]) if len(neur_locs) > 0 else np.array([root/vres])
+
+            # Generate dendrites from root
+            for i in range(int(dt_params[0])):
+                theta = np.random.rand() * 2 * np.pi
+                r = np.sqrt(np.random.rand()) * dt_params[1]
+                
+                # Calculate end point
+                dends = np.floor([
+                    r * np.cos(theta) + root[0],
+                    r * np.sin(theta) + root[1],
+                    2 * dt_params[2] * (np.random.rand() - 0.5) + root[2]
+                ])
+
+                if (0 < dends[0] < vol_sz[0] and 
+                    0 < dends[1] < vol_sz[1] and 
+                    0 < dends[2] < vol_sz[2]):
+                    
+                    # Calculate shift for boundary conditions
+                    max_shift, shift_loc = self._calculate_boundary_shift(root, dends, vol_sz)
+                    bg_pts = []
+                    numit = 0
+
+                    while len(bg_pts) == 0 and numit < 30:
+                        numit += 1
+                        root2 = np.round(max_shift * (dends - root) + root)
+                        
+                        # Apply random shift based on boundary location
+                        root2 = self._apply_boundary_shift(root2, shift_loc, shift_dist, vol_sz)
+                        
+                        # Generate random walk
+                        bg_pts = self._dendrite_randomwalk2(
+                            M, root2, dends,
+                            self.bg_params.distsc,
+                            self.bg_params.maxlength,
+                            self.bg_params.fillweight,
+                            self.bg_params.maxel,
+                            self.bg_params.minlength
+                        )
+
+                        if len(bg_pts) > 0:
+                            bg_pts = np.vstack([root2, bg_pts])
+                            try:
+                                # Calculate dendrite size variation
+                                dend_sz = max(0, np.random.normal(1, dend_var)) ** 2
+                                
+                                # Calculate weights
+                                if len(bg_pts) > 2:
+                                    diffs = np.abs(np.diff(np.abs(np.diff(bg_pts, axis=0)), axis=0))
+                                    weights = dend_sz * (1 - (1 - 1/np.sqrt(2)) * 
+                                               np.concatenate([[0], np.sum(diffs, axis=1)/2, [0]]))
+                                else:
+                                    weights = dend_sz * np.ones(len(bg_pts))
+                                
+                                # Convert to linear indices
+                                bg_pts_idx = np.ravel_multi_index(
+                                    (bg_pts[:, 0], bg_pts[:, 1], bg_pts[:, 2]),
+                                    vol_sz
+                                )
+                                dend_pts.extend(bg_pts_idx)
+                                num_vol.ravel()[bg_pts_idx] = weights
+                                
+                            except Exception as e:
+                                print(f"Error processing dendrite points: {e}")
+                                continue
+
+            if dend_pts:
+                idx += 1
+                num_pts += len(dend_pts)
+                idx_vol.ravel()[dend_pts] = idx
+                num_vol.ravel()[dend_pts] *= thickness_scale * dt_params[3]
+
+        # Dilate dendrite paths
+        _, path_num = self._dilate_dendrite_paths(num_vol, idx_vol, ~bg_pix)
+
+        # Update component numbers
+        n_comps = self.vol_params.N_neur + self.vol_params.N_den
+        path_num[path_num > 0] += n_comps
+        neural_volume.soma += path_num
+
+        # Update weight scale parameters
+        wt_sc = self.dend_params.weight_scale
+        
+        # Create new components list
+        new_comps = []
+        for i in range(n_comps + 1, n_comps + idx + 1):
+            comp_idx = np.where(neural_volume.soma == i)[0]
+            if len(comp_idx) > 0:
+                comp_vals = (wt_sc[1] * np.exp(-(dt_params[1]/vres)/wt_sc[0]) + 
+                            (1 - wt_sc[1])) * (1 - wt_sc[2] * np.random.rand(len(comp_idx)))
+                new_comps.append((comp_idx, comp_vals, False))
+                neural_volume.fluorescence[comp_idx] = comp_vals
+
+        # Update number of dendrites generated
+        self.vol_params.N_den2 = idx
+
+        if self.vol_params.verbose >= 1:
+            print('done.')
+
+        return neural_volume, new_comps, neur_locs
+
+    def _calculate_boundary_shift(
+        self,
+        root: np.ndarray,
+        dends: np.ndarray,
+        vol_sz: np.ndarray
+    ) -> Tuple[float, int]:
+        """Calculate shift needed to handle boundary conditions."""
+        shifts = np.zeros((2, 3))
+        shifts[0] = (root < 1) * (1 - root) / (dends - root)
+        shifts[1] = (root > vol_sz) * (vol_sz - root) / (dends - root)
+        
+        max_shift = np.nanmax(shifts)
+        shift_loc = np.unravel_index(np.nanargmax(shifts), shifts.shape)[1]
+        
+        return max_shift, shift_loc
+
+    def _apply_boundary_shift(
+        self,
+        root: np.ndarray,
+        shift_loc: int,
+        shift_dist: int,
+        vol_sz: np.ndarray
+    ) -> np.ndarray:
+        """Apply random shift based on boundary location."""
+        shifts = {
+            0: np.array([0, np.random.randint(shift_dist), np.random.randint(shift_dist)]),
+            1: np.array([np.random.randint(shift_dist), 0, np.random.randint(shift_dist)]),
+            2: np.array([np.random.randint(shift_dist), np.random.randint(shift_dist), 0])
+        }
+        
+        root = root + shifts.get(shift_loc, np.zeros(3))
+        return np.clip(root, 1, vol_sz - 1)
+
+    def _dendrite_randomwalk2(
+        self,
+        M: np.ndarray,
+        root: np.ndarray,
+        ends: np.ndarray,
+        distsc: float,
+        maxlength: int,
+        fillweight: float,
+        maxel: int,
+        minlength: int
+    ) -> np.ndarray:
+        """Generate random walk path through neural volume.
+        
+        Args:
+            M: Matrix indicating difficulty to occupy each location (single precision)
+            root: 1x3 start location for random walk path
+            ends: Target end location for the random walk
+            distsc: Weighting parameter for directed walk (>0)
+            maxlength: Maximum length for random path
+            fillweight: Weighting value for single step against occupancy rate
+            maxel: Maximum number of components within a single voxel
+            minlength: Minimum length for random path
+            
+        Returns:
+            path_out: Output path of the random walk as Nx3 array of coordinates
+        """
+        # Convert inputs to correct types
+        M = M.astype(np.float32)
+        root = np.asarray(root, dtype=np.int32)
+        ends = np.asarray(ends, dtype=np.int32)
+        distsc = float(distsc)
+        maxlength = int(maxlength)
+        fillweight = float(fillweight)
+        maxel = int(maxel)
+        minlength = int(minlength)
+
+        # Initialize path with root point
+        path = [root]
+        current = root
+        
+        # Direction to target
+        direction = ends - root
+        direction = direction / np.sqrt(np.sum(direction**2))
+        
+        # Possible steps in 3D (26-connectivity)
+        steps = np.array([
+            [x, y, z] for x in [-1,0,1] 
+                      for y in [-1,0,1] 
+                      for z in [-1,0,1] 
+                      if not (x == 0 and y == 0 and z == 0)
+        ])
+        
+        # Try to reach target
+        for _ in range(maxlength):
+            if len(path) >= maxlength:
+                break
+                
+            # Calculate step probabilities
+            possible_positions = current + steps
+            
+            # Remove positions outside volume
+            valid_mask = np.all((possible_positions >= 0) & 
+                              (possible_positions < np.array(M.shape)), axis=1)
+            if not np.any(valid_mask):
+                break
+                
+            valid_steps = steps[valid_mask]
+            valid_positions = possible_positions[valid_mask]
+            
+            # Get occupancy values for valid positions
+            occupancy = np.array([M[tuple(pos)] for pos in valid_positions])
+            
+            # Skip if all positions are occupied
+            if np.all(occupancy >= fillweight * maxel):
+                break
+                
+            # Calculate directional preference
+            step_directions = valid_steps / np.sqrt(np.sum(valid_steps**2, axis=1))[:, None]
+            directional_weight = np.exp(distsc * np.sum(step_directions * direction, axis=1))
+            
+            # Calculate total weights
+            total_weight = directional_weight * (1 / (1 + occupancy/(fillweight * maxel)))
+            
+            # Normalize probabilities
+            probs = total_weight / np.sum(total_weight)
+            
+            # Choose next step
+            next_idx = np.random.choice(len(valid_steps), p=probs)
+            next_pos = valid_positions[next_idx]
+            
+            # Update current position and path
+            current = next_pos
+            path.append(current)
+            
+            # Check if we've reached target
+            if np.all(current == ends):
+                break
+                
+        path = np.array(path)
+        
+        # Return empty path if too short
+        if len(path) < minlength:
+            return np.array([])
+            
+        return path[1:]  # Exclude root point from return path
+    
+    def _process_paths(
+        self,
+        paths: List[np.ndarray],
+        cell_body: Tuple[np.ndarray, ...],
+        thickness_scale: float
+    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """
+        Process dendrite paths to generate indices, values and apical dendrite markers.
+        
+        Args:
+            paths: List of Nx3 arrays containing path coordinates
+            cell_body: Tuple of arrays containing cell body indices
+            thickness_scale: Scaling factor for dendrite thickness
+            
+        Returns:
+            fine_paths_idx: Binary array indicating path locations
+            fine_paths_val: Array of fluorescence values along paths
+            fine_paths_ad: Binary array marking apical dendrites
+        """
+        vol_sz = np.array(self.vol_params.vol_sz)
+        vres = self.vol_params.vres
+        full_dims = tuple(vol_sz * vres)
+        
+        fine_paths_idx = np.zeros(full_dims, dtype=np.uint16)
+        fine_paths_val = np.zeros(full_dims, dtype=np.float32)
+        fine_paths_ad = np.zeros(full_dims, dtype=np.uint16)
+        
+        if len(cell_body) == 0:
+            return fine_paths_idx, fine_paths_val, fine_paths_ad
+            
+        cell_center = np.mean(np.array(cell_body).T, axis=1)
+        
+        for path in paths:
+            if len(path) == 0:
+                continue
+                
+            path = np.clip(path, 0, np.array(full_dims) - 1)
+            path_indices = tuple(path.T.astype(int))
+            
+            # Determine if path is apical (growing upward)
+            is_apical = np.mean(path[:, 2] - cell_center[2]) > 0
+            
+            # Calculate path values
+            weights = np.ones(len(path))
+            if len(path) > 2:
+                # Add distance-based attenuation
+                distances = np.sqrt(np.sum((path - cell_center)**2, axis=1))
+                weights *= np.exp(-distances / (vol_sz.mean() * vres))
+            
+            # Apply thickness scale and add slight randomness
+            weights *= thickness_scale * (0.9 + 0.2 * np.random.rand(len(weights)))
+            
+            # Update arrays
+            fine_paths_idx[path_indices] = 1
+            fine_paths_val[path_indices] = weights
+            if is_apical:
+                fine_paths_ad[path_indices] = 1
+        
+        return fine_paths_idx, fine_paths_val, fine_paths_ad
+    
+    def _generate_fluorescence_distribution(
+        self,
+        avg_radius: float,
+        vres: float,
+        fluor_dist: str
+    ) -> np.ndarray:
+        """
+        Generate a fluorescence distribution for neurons.
+        
+        Args:
+            avg_radius: Average radius of the neuron in pixels
+            vres: Volume resolution scaling factor
+            fluor_dist: Type of fluorescence distribution
+            
+        Returns:
+            np.ndarray: 3D array containing the fluorescence distribution
+        """
+        # Calculate size of distribution
+        size = int(np.ceil(2 * avg_radius * vres))
+        if size % 2 == 0:
+            size += 1
+            
+        # Create coordinate grid
+        x, y, z = np.meshgrid(
+            np.arange(size) - size//2,
+            np.arange(size) - size//2,
+            np.arange(size) - size//2
+        )
+        r = np.sqrt(x**2 + y**2 + z**2)
+        
+        # Generate uniform distribution within radius
+        dist = np.where(r <= avg_radius * vres, 1.0, 0.0)
+        
+        return dist
+
+    def _calculate_fluorescence_values(
+        self,
+        cell_points: np.ndarray,
+        soma_points: np.ndarray,
+        dend_points: np.ndarray,
+        fluo_dist: np.ndarray,
+        neuron_loc: np.ndarray,
+        vres: float,
+        weight_scale: float
+    ) -> np.ndarray:
+        """
+        Calculate fluorescence values for neuron points.
+        
+        Args:
+            cell_points: Array of all cell points
+            soma_points: Array of soma points
+            dend_points: Array of dendrite points
+            fluo_dist: Fluorescence distribution array
+            neuron_loc: Location of the neuron
+            vres: Volume resolution scaling factor
+            weight_scale: Scaling factor for dendrite weights
+            
+        Returns:
+            np.ndarray: Array of fluorescence values for each point
+        """
+        # Initialize values array
+        values = np.zeros(len(cell_points))
+        
+        # Get distribution dimensions
+        dist_size = fluo_dist.shape[0]
+        dist_center = dist_size // 2
+        
+        # Calculate values for soma points
+        if len(soma_points) > 0:
+            # Calculate relative positions to neuron center
+            rel_positions = ((soma_points - neuron_loc) * vres).astype(int)
+            # Shift positions to distribution center
+            dist_positions = rel_positions + dist_center
+            
+            # Get valid indices within distribution bounds
+            valid_mask = np.all((dist_positions >= 0) & (dist_positions < dist_size), axis=1)
+            valid_positions = dist_positions[valid_mask]
+            
+            # Get values from distribution
+            soma_values = fluo_dist[valid_positions[:, 0], 
+                                valid_positions[:, 1], 
+                                valid_positions[:, 2]]
+            
+            # Find indices of soma points in cell_points
+            soma_indices = np.where(np.isin(cell_points, soma_points).all(axis=1))[0]
+            soma_indices = soma_indices[valid_mask]
+            
+            # Assign values
+            values[soma_indices] = soma_values
+        
+        # Calculate values for dendrite points
+        if len(dend_points) > 0:
+            # Calculate distance from soma center
+            dend_distances = np.sqrt(np.sum((dend_points - neuron_loc)**2, axis=1))
+            
+            # Calculate dendrite values with distance-based attenuation
+            max_distance = np.max(dend_distances)
+            if max_distance > 0:
+                dend_values = weight_scale * np.exp(-dend_distances / max_distance)
+                
+                # Find indices of dendrite points in cell_points
+                dend_indices = np.where(np.isin(cell_points, dend_points).all(axis=1))[0]
+                
+                # Assign values
+                values[dend_indices] = dend_values
+        
+        return values
+    def _generate_bgdendrites(self, bg_pix: np.ndarray, **kwargs) -> Tuple[np.ndarray, np.ndarray]:
+        """Implementation of generate_bgdendrites.m - Generate background dendrites."""
+        pass
+    
+    
+    def _grow_apical_dendrites(self, neur_soma: np.ndarray, neur_ves: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+        """Implementation of growApicalDendrites.m - Generate apical dendrites."""
+        pass

@@ -7,8 +7,9 @@ import random
 import copy
 import json
 import matplotlib.pyplot as plt
+import sys
 import os
-
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from ..models.parameters import VolumeParams, VascParams, NodeParams
 from ..models.structures import Node, Connection
 from ..utils.geometry import rotation_matrix, create_disk_structure

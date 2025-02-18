@@ -1,5 +1,5 @@
 from dataclasses import dataclass, field
-from typing import List, Tuple, Optional, Union
+from typing import List, Tuple, Optional, Union, Dict
 import numpy as np
 
 @dataclass
@@ -70,6 +70,7 @@ class NodeParams:
 @dataclass
 class NeuronParams:
     """Parameters for neuron generation."""
+    # User-defined parameters
     n_samps: int = 1000  # Number of sphere samples for mesh
     l_scale: float = 5.0  # Length-scale for GP of soma shapes
     p_scale: float = 3.4  # Variance of GP of soma shape
@@ -79,6 +80,11 @@ class NeuronParams:
     eccen: float = 0.25  # Maximum eccentricity of neuron
     neur_type: str = 'default'  # Type of neuron ('default', 'pyr', 'peanut')
     fluor_dist: Optional[dict] = None  # Fluorescence distribution parameters
+    
+    # Runtime parameters (initialized during simulation)
+    S_samp: Optional[np.ndarray] = field(default=None, init=False)  # Sphere sampling points
+    Tri: Optional[np.ndarray] = field(default=None, init=False)  # Triangulation for mesh
+    dists: Optional[np.ndarray] = field(default=None, init=False)  # Geodesic distances
 
 @dataclass
 class DendriteParams:
@@ -107,3 +113,54 @@ class NeuralVolume:
     fluorescence: np.ndarray  # Volume containing fluorescence levels
     nucleus_data: List[Tuple[np.ndarray, float]]  # Locations and fluorescence values for nuclei
     soma_data: List[np.ndarray]  # Locations for cell bodies
+@dataclass
+class PSFParams:
+    """Parameters for PSF generation."""
+    objNA: float = 0.8  # Objective numerical aperture
+    NA: float = 0.6  # PSF numerical aperture
+    lambda_: float = 920.0  # Wavelength in nm
+    n: float = 1.33  # Refractive index
+    res_lateral: float = 0.5  # Lateral resolution in microns
+    res_axial: float = 2.0  # Axial resolution in microns
+
+    def __post_init__(self):
+        """Validate parameters after initialization."""
+        if not isinstance(self.scatter_sizes, np.ndarray):
+            self.scatter_sizes = np.array(self.scatter_sizes)
+        if not isinstance(self.scatter_weights, np.ndarray):
+            self.scatter_weights = np.array(self.scatter_weights)
+            
+        # Ensure scatter_sizes is 2D with shape (N,1)
+        if self.scatter_sizes.ndim == 1:
+            self.scatter_sizes = self.scatter_sizes.reshape(-1, 1)
+            
+        # Ensure scatter_weights is 1D with same length as scatter_sizes
+        if self.scatter_weights.shape[0] != self.scatter_sizes.shape[0]:
+            raise ValueError("scatter_weights must have same length as scatter_sizes")
+
+@dataclass
+class CalciumParams:
+    """Parameters for calcium dynamics simulation."""
+    sat_type: str = 'Ca_DE'      # 'single', 'Ca_DE', or 'double'
+    dt: float = 1/100            # Time step
+    ext_rate: float = 292.3      # Extrusion rate
+    ca_bind: float = 110         # Calcium binding ratio
+    ca_rest: float = 50e-9       # Resting calcium concentration
+    ind_con: float = 200e-6      # Indicator concentration
+    ca_dis: float = 290e-9       # Calcium dissociation constant
+    ca_sat: float = 1.0          # Calcium saturation parameter
+    prot_type: str = 'GCaMP6'    # Protein type
+    k_on: float = 1.0            # Binding rate
+    k_off: float = 0.2           # Unbinding rate
+    ca_amp: float = 76.1251      # Calcium transient amplitude
+    t_on: float = 0.8535         # Rising time constant
+    t_off: float = 98.6173       # Falling time constant
+
+@dataclass
+class ActivityParams:
+    """Parameters for neural activity simulation."""
+    n_timepoints: int = 2500  # Number of timepoints
+    dt: float = 1/30  # Time step in seconds
+    ca_decay: float = 1.0  # Calcium decay time constant
+    noise_std: float = 0.1  # Noise standard deviation
+    spike_rate: float = 0.1  # Average spike rate
