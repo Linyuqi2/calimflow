@@ -741,49 +741,60 @@ class VasculatureSimulator:
             np.arange(-dilrad, dilrad + 1),
             np.arange(-dilrad, dilrad + 1),
             np.arange(-dilrad, dilrad + 1),
-            indexing="ij",
+            indexing='ij',
         )
         se = np.exp(-2 * (x**2 + y**2 + z**2) / dilrad**2)
         tmp_vol = np.zeros(self.vasc_params._szum, dtype=np.float32)
-
+        
+        # Ensure vessel_size has 4 elements (adding stddev for capillaries if missing)
+        if len(self.vasc_params._ves_size) < 4:
+            self.vasc_params._ves_size = np.append(
+                self.vasc_params._ves_size, self.vasc_params._ves_size[2] * 0.25
+            )
+        
+        # Ensure maxcappdist is set
+        if not hasattr(self.vasc_params, '_maxcappdist') or self.vasc_params._maxcappdist is None:
+            self.vasc_params._maxcappdist = 40.0 * self.vol_params.res
+        
         # Process each connection
         for i in range(len(self._conn)):
-            tmp_pos = np.round(self._conn[i].locs / self.vol_params.res)
-            tmp_pos = tmp_pos[:: max(1, dilrad // 3)]
+            if self._conn[i].locs is not None:  # Make sure locs exist
+                tmp_pos = np.round(self._conn[i].locs / self.vol_params.res)
+                tmp_pos = tmp_pos[:: max(1, dilrad // 3)]
 
-            for pos in tmp_pos:
-                # Calculate bounds
-                tmp_l = pos - dilrad
-                tmp_l = (tmp_l < 0) * (-tmp_l)
-                tmp_u = pos + dilrad
-                tmp_u = (tmp_u > self.vasc_params._szum - 1) * (
-                    tmp_u - (self.vasc_params._szum - 1)
-                )
+                for pos in tmp_pos:
+                    # Calculate bounds
+                    tmp_l = pos - dilrad
+                    tmp_l = (tmp_l < 0) * (-tmp_l)
+                    tmp_u = pos + dilrad
+                    tmp_u = (tmp_u > self.vasc_params._szum - 1) * (
+                        tmp_u - (self.vasc_params._szum - 1)
+                    )
 
-                # Extract relevant portion of structural element
-                tmp = se[
-                    int(tmp_l[0]) : se.shape[0] - int(tmp_u[0]),
-                    int(tmp_l[1]) : se.shape[1] - int(tmp_u[1]),
-                    int(tmp_l[2]) : se.shape[2] - int(tmp_u[2]),
-                ]
+                    # Extract relevant portion of structural element
+                    tmp = se[
+                        int(tmp_l[0]) : se.shape[0] - int(tmp_u[0]),
+                        int(tmp_l[1]) : se.shape[1] - int(tmp_u[1]),
+                        int(tmp_l[2]) : se.shape[2] - int(tmp_u[2]),
+                    ]
 
-                # Calculate volume indices
-                tmp_l = pos - dilrad + tmp_l
-                tmp_u = pos + dilrad - tmp_u
+                    # Calculate volume indices
+                    tmp_l = pos - dilrad + tmp_l
+                    tmp_u = pos + dilrad - tmp_u
 
-                # Update volume using maximum operation
-                tmp_vol[
-                    int(tmp_l[0]) : int(tmp_u[0]) + 1,
-                    int(tmp_l[1]) : int(tmp_u[1]) + 1,
-                    int(tmp_l[2]) : int(tmp_u[2]) + 1,
-                ] = np.maximum(
+                    # Update volume using maximum operation
                     tmp_vol[
                         int(tmp_l[0]) : int(tmp_u[0]) + 1,
                         int(tmp_l[1]) : int(tmp_u[1]) + 1,
                         int(tmp_l[2]) : int(tmp_u[2]) + 1,
-                    ],
-                    tmp,
-                )
+                    ] = np.maximum(
+                        tmp_vol[
+                            int(tmp_l[0]) : int(tmp_u[0]) + 1,
+                            int(tmp_l[1]) : int(tmp_u[1]) + 1,
+                            int(tmp_l[2]) : int(tmp_u[2]) + 1,
+                        ],
+                        tmp,
+                    )
 
         # Sample capillary positions
         capp_pos, _ = pseudo_rand_sample_3d(
@@ -801,8 +812,8 @@ class VasculatureSimulator:
 
         # Setup connections from diving vessels to capillaries
         nv_vert_conn = np.random.randint(
-            0,
-            self.vasc_params._szum[2] // self.vasc_params.ves_freq[2],
+            1,  # Ensure at least 1 connection
+            max(2, self.vasc_params._szum[2] // self.vasc_params.ves_freq[2]),
             size=self.vasc_params._nvert,
         )
         self.vasc_params._nvert_sum = np.sum(nv_vert_conn)
@@ -812,12 +823,6 @@ class VasculatureSimulator:
         # Find vertical vessel indices
         vert_idxs = [i for i, n in enumerate(self._nodes) if n.node_type == "sfvt"]
 
-        # Ensure vessel size array has enough elements
-        if len(self.vasc_params._ves_size) < 4:
-            self.vasc_params._ves_size = np.append(
-                self.vasc_params._ves_size, self.vasc_params._ves_size[2] * 0
-            )
-
         # Process each vertical vessel
         for i, vert_idx in enumerate(vert_idxs):
             ves_idx = [vert_idx]
@@ -825,7 +830,8 @@ class VasculatureSimulator:
             # Find all connected vertical vessels
             while True:
                 tmp_idx = [
-                    n for n in self._nodes[ves_idx[-1]].conn if self._nodes[n].node_type == "vert"
+                    n for n in self._nodes[ves_idx[-1]].conn 
+                    if self._nodes[n].node_type == "vert"
                 ]
                 tmp_idx = list(set(tmp_idx) - set(ves_idx))
                 if not tmp_idx:
@@ -833,14 +839,29 @@ class VasculatureSimulator:
                 ves_idx.extend(tmp_idx)
 
             ves_idx = ves_idx[1:]  # Remove first element (surface vessel)
+            if not ves_idx:  # Skip if no vertical vessels
+                continue
 
             # Connect capillaries to vertical vessels
             for _ in range(nv_vert_conn[i]):
+                if not ves_idx:  # Skip if no vertical vessels
+                    continue
+
                 tmp_idx = np.random.choice(ves_idx)
 
-                # Find closest capillary
-                dists = np.sum((capp_pos - self._nodes[tmp_idx].pos) ** 2, axis=1)
-                tmp = np.nanargmin(dists)
+                # Find closest capillary - with safety checks
+                valid_capp_indices = np.where(~np.isnan(capp_pos[:, 0]))[0]
+                if len(valid_capp_indices) == 0:
+                    continue  # No valid capillaries left
+                
+                valid_capp_pos = capp_pos[valid_capp_indices]
+                dists = np.sum((valid_capp_pos - self._nodes[tmp_idx].pos) ** 2, axis=1)
+                
+                if np.all(np.isnan(dists)):
+                    continue  # Skip if all distances are NaN
+                    
+                min_idx = np.nanargmin(dists)
+                tmp = valid_capp_indices[min_idx]
 
                 # Create new node and connection
                 self._nodes.append(
@@ -874,102 +895,163 @@ class VasculatureSimulator:
         self.vasc_params._nnodes = node_idx
         self.vasc_params._nconn = conn_idx
 
+        # Add remaining capillaries as nodes
         for i in range(capp_pos.shape[0]):
-            if not np.isnan(capp_pos[i]).any():
+            if not np.any(np.isnan(capp_pos[i])):  # Check all dimensions are valid
                 self._nodes.append(
                     Node(num=node_idx, root=-1, conn=[], pos=capp_pos[i].copy(), node_type="capp")
                 )
                 node_idx += 1
-        # Update vasculature parameters
+        
+        # Update node count
         self.vasc_params._nnodes = node_idx
 
         # Setup capillary-to-capillary connections
         vert_conn_idxs = [
-            i
-            for i, n in enumerate(self._nodes)
-            if self._nodes[i].root != -1 and self._nodes[i].node_type == "capp"
+            i for i, n in enumerate(self._nodes)
+            if n.root != -1 and n.node_type == "capp"
         ]
         capp_conn_idxs = [
-            i
-            for i, n in enumerate(self._nodes)
-            if self._nodes[i].root == -1 and self._nodes[i].node_type == "capp"
+            i for i, n in enumerate(self._nodes)
+            if n.root == -1 and n.node_type == "capp"
         ]
         conn_idxs = vert_conn_idxs + capp_conn_idxs
+        
+        # Skip the rest if no capillaries
+        if len(conn_idxs) == 0:
+            print("Warning: No capillaries generated. Check vasculature parameters.")
+            return
 
         # Get positions for distance calculation
         capp_pos = np.vstack([self._nodes[i].pos for i in conn_idxs])
-
+        
+        # Set _ncapp to actual number of capillaries
+        self.vasc_params._ncapp = len(conn_idxs)
+        
+        if self.vasc_params._ncapp == 0:
+            print("Warning: No capillaries generated. Check vasculature parameters.")
+            return
+        
         # Calculate distance matrix and setup initial connections
         capp_mat = self._pos2dists(capp_pos)
         capp_mat[np.eye(self.vasc_params._ncapp, dtype=bool)] = np.inf
-        capp_mat[: self.vasc_params._nvert_sum, : self.vasc_params._nvert_sum] = np.inf
+        
+        # Handle case where there are fewer than nvert_sum capillaries
+        nvert_sum = min(self.vasc_params._nvert_sum, self.vasc_params._ncapp)
+        if nvert_sum > 0:
+            capp_mat[:nvert_sum, :nvert_sum] = np.inf
 
-        # Initialize connection matrix and find minimum distances
+        # Initialize connection matrix 
         capp_conn_mat = np.zeros((self.vasc_params._ncapp, self.vasc_params._ncapp))
-        min_capp = np.unravel_index(np.argmin(capp_mat, axis=0), capp_mat.shape)
-
-        # Set initial connections using array indexing
-        idx = np.arange(self.vasc_params._ncapp)
-        capp_conn_mat[idx, min_capp] = 1
-        capp_conn_mat[min_capp, idx] = 1
-        capp_mat[idx, min_capp] = np.inf
-        capp_mat[min_capp, idx] = np.inf
+        
+        # Find minimum distances safely
+        for i in range(self.vasc_params._ncapp):
+            if np.all(np.isinf(capp_mat[:, i])):
+                continue  # Skip if no valid connections
+            
+            min_idx = np.argmin(capp_mat[:, i])
+            capp_conn_mat[i, min_idx] = 1
+            capp_conn_mat[min_idx, i] = 1
+            
+            # Mark as processed
+            capp_mat[i, min_idx] = np.inf
+            capp_mat[min_idx, i] = np.inf
 
         # Remove distant connections
         capp_mat[capp_mat > self.vasc_params._maxcappdist] = np.inf
 
         # Initial processing of connections
         for i in range(self.vasc_params._ncapp):
-            if np.sum(capp_conn_mat[i, :]) >= 3:
+            conn_count = np.sum(capp_conn_mat[i, :])
+            if conn_count >= 3:
                 capp_mat[i, :] = np.inf
                 capp_mat[:, i] = np.inf
             capp_mat[i, capp_conn_mat[i, :].astype(bool)] = np.inf
             capp_mat[capp_conn_mat[i, :].astype(bool), i] = np.inf
 
         # Check vessel intersections
-        for i in range(self.vasc_params._nvert_sum, self.vasc_params._ncapp):
+        n_vert_sum = min(self.vasc_params._nvert_sum, self.vasc_params._ncapp)
+        for i in range(n_vert_sum, self.vasc_params._ncapp):
             for j in range(i + 1, self.vasc_params._ncapp):
-                if capp_mat[i, j] < np.inf:
+                if np.isfinite(capp_mat[i, j]):  # Check if connection is possible
                     num_points = int(2 * capp_mat[i, j])
                     x = np.linspace(capp_pos[i, 0], capp_pos[j, 0], num_points)
                     y = np.linspace(capp_pos[i, 1], capp_pos[j, 1], num_points)
                     z = np.linspace(capp_pos[i, 2], capp_pos[j, 2], num_points)
-                    xpix = np.ceil(np.column_stack([x, y, z]))
-
-                    # Convert to indices and check for vessel intersection
-                    indices = (
-                        (xpix[:, 0]).astype(int),
-                        (xpix[:, 1]).astype(int),
-                        (xpix[:, 2]).astype(int),
-                    )
-                    if np.any(self._neur_ves[indices]):
+                    
+                    # Round to nearest integer for checking
+                    xpix = np.ceil(np.column_stack([x, y, z])).astype(int)
+                    
+                    # Clip to valid volume range
+                    xpix = np.clip(xpix, 0, np.array(self._neur_ves.shape) - 1)
+                    
+                    # Check if any point lies in an existing vessel
+                    if np.any(self._neur_ves[xpix[:, 0], xpix[:, 1], xpix[:, 2]]):
                         capp_mat[i, j] = np.inf
                         capp_mat[j, i] = np.inf
 
         print("Done vessel intersection processing")
 
         # Main connection loop
-        while True:
+        loop_flag = True
+        max_iterations = 1000  # Safety limit
+        iteration = 0
+        
+        while loop_flag and iteration < max_iterations:
+            iteration += 1
             capp_sum = np.sum(capp_conn_mat, axis=1)
-            if np.min(capp_sum[self.vasc_params._nvert_sum :]) > 1:
+            
+            # Check if all capillaries have at least 2 connections
+            if n_vert_sum >= len(capp_sum) or (
+                len(capp_sum[n_vert_sum:]) > 0 and np.min(capp_sum[n_vert_sum:]) > 1
+            ):
                 break
+                
+            # Find capillaries with only one connection
             idxs = np.where(capp_sum == 1)[0]
-            if np.min(np.min(capp_mat[:, idxs])) == np.inf:
+            if len(idxs) == 0:
                 break
-
+                
+            # Check if any more connections are possible
+            if np.all(np.isinf(capp_mat[:, idxs])):
+                break
+                
+            # Pick a random underpopulated capillary
             rnd_idx = np.random.choice(idxs)
+            
+            # Skip if no valid connections
+            if np.all(np.isinf(capp_mat[rnd_idx, :])):
+                continue
+                
             # Calculate connection probabilities
-            cap_dist_inv = 1.0 / (capp_mat[rnd_idx, :] ** self.vasc_params._dist_sc)
-            cap_dist_inv[np.isinf(cap_dist_inv)] = 0
-
+            cap_dist_inv = np.zeros_like(capp_mat[rnd_idx, :])
+            valid_mask = np.isfinite(capp_mat[rnd_idx, :])
+            
+            if not np.any(valid_mask):
+                continue
+                
+            cap_dist_inv[valid_mask] = 1.0 / (capp_mat[rnd_idx, valid_mask] ** self.vasc_params.dist_sc)
+            
+            # Normalize weights
+            if np.sum(cap_dist_inv) == 0:
+                continue
+                
+            cap_cdf = np.concatenate(([0], np.cumsum(cap_dist_inv) / np.sum(cap_dist_inv)))
+            
             # Find connection using CDF
-            cap_cdf = np.concatenate(([0], np.cumsum(cap_dist_inv) / np.sum(cap_dist_inv, axis=1)))
-            lnk_idx = np.where(np.diff(cap_cdf > np.random.random()))[0][0]
-
+            rand_val = np.random.random()
+            diff_vals = cap_cdf > rand_val
+            diff_idxs = np.where(np.diff(diff_vals))[0]
+            
+            if len(diff_idxs) == 0:
+                continue
+                
+            lnk_idx = diff_idxs[0]
+            
             # Update connections
             capp_conn_mat[rnd_idx, lnk_idx] = 1
             capp_conn_mat[lnk_idx, rnd_idx] = 1
-
+            
             # Update distance matrix
             mask_rnd = capp_conn_mat[rnd_idx, :].astype(bool)
             mask_lnk = capp_conn_mat[lnk_idx, :].astype(bool)
@@ -979,7 +1061,7 @@ class VasculatureSimulator:
             capp_mat[rnd_idx, mask_lnk] = np.inf
             capp_mat[rnd_idx, lnk_idx] = np.inf
             capp_mat[lnk_idx, rnd_idx] = np.inf
-
+            
             if np.sum(capp_conn_mat[lnk_idx, :]) >= 3:
                 capp_mat[lnk_idx, :] = np.inf
                 capp_mat[:, lnk_idx] = np.inf
@@ -987,15 +1069,18 @@ class VasculatureSimulator:
         # Get final connections
         conn_s, conn_f = np.where(np.triu(capp_conn_mat))
         conn_mat = sparse.lil_matrix((len(self._nodes), len(self._nodes)))
-        conn_idx = self.vasc_params._nconn
+        
+        # Create connections
         for s, f in zip(conn_s, conn_f):
-            self._nodes[conn_idxs[s]].conn.append(conn_idxs[f])
-            self._nodes[conn_idxs[f]].conn.append(conn_idxs[s])
-            self._conn.append(
-                Connection(start=conn_idxs[s], ends=conn_idxs[f], weight=np.nan, misc="capp")
-            )
-            conn_mat[conn_idxs[s], conn_idxs[f]] = conn_idx
-            conn_idx += 1
+            if s < len(conn_idxs) and f < len(conn_idxs):  # Safety check
+                self._nodes[conn_idxs[s]].conn.append(conn_idxs[f])
+                self._nodes[conn_idxs[f]].conn.append(conn_idxs[s])
+                
+                self._conn.append(
+                    Connection(start=conn_idxs[s], ends=conn_idxs[f], weight=np.nan, misc="capp")
+                )
+                conn_mat[conn_idxs[s], conn_idxs[f]] = conn_idx
+                conn_idx += 1
 
         # Update vasculature parameters
         self.vasc_params._nconn = conn_idx
@@ -1009,103 +1094,114 @@ class VasculatureSimulator:
             tmp_conn = self._nodes[node_idx].conn
             for j in tmp_conn:
                 if conn_mat[node_idx, j]:
-                    to_connect.append(conn_mat[node_idx, j])
+                    to_connect.append(int(conn_mat[node_idx, j]))
 
-        to_connect = np.array(to_connect).flatten()
+        # Convert to list of integers
+        to_connect = [int(tc) for tc in to_connect if not np.isnan(tc)]
+        
+        # Update connection matrix for vessel-to-capillary connections
         conn_to_connect = [i for i, c in enumerate(self._conn) if c.misc == "vtcp"]
-
-        # Update connection matrix
         for i in conn_to_connect:
             conn_mat[self._conn[i].ends, self._conn[i].start] = i
         conn_mat = conn_mat + conn_mat.T
 
         # Process weights for connected vessels
-        while len(to_connect) > 0:
-            curr_conn = int(to_connect[0])
-            if np.isnan(self._conn[curr_conn].weight):
-                conn_start = self._conn[curr_conn].start
-                conn_end = self._conn[int(curr_conn)].ends
+        while to_connect:
+            curr_conn = to_connect[0]
+            
+            # Skip already processed connections
+            if curr_conn >= len(self._conn) or not np.isnan(self._conn[curr_conn].weight):
+                to_connect = to_connect[1:]
+                continue
+                
+            conn_start = self._conn[curr_conn].start
+            conn_end = self._conn[curr_conn].ends
 
-                # Get connected vessels
-                start_conns = self._nodes[conn_start].conn
-                end_conns = self._nodes[conn_end].conn
-                start_conns = conn_mat[conn_start, start_conns].toarray().flatten()
-                end_conns = conn_mat[conn_end, end_conns].toarray().flatten()
+            # Get connected vessels
+            start_conns = self._nodes[conn_start].conn
+            end_conns = self._nodes[conn_end].conn
+            
+            # Safe array access
+            start_conns = [int(conn_mat[conn_start, sc]) for sc in start_conns]
+            end_conns = [int(conn_mat[conn_end, ec]) for ec in end_conns]
+            
+            # Remove current connection and zeros/invalid connections
+            start_conns = [sc for sc in start_conns if sc != curr_conn and sc > 0 and sc < len(self._conn)]
+            end_conns = [ec for ec in end_conns if ec != curr_conn and ec > 0 and ec < len(self._conn)]
 
-                # Remove current connection and zeros
-                start_conns = start_conns[(start_conns != curr_conn) & (start_conns != 0)]
-                end_conns = end_conns[(end_conns != curr_conn) & (end_conns != 0)]
+            # Get weights
+            start_weights = np.array([self._conn[sc].weight for sc in start_conns])
+            end_weights = np.array([self._conn[ec].weight for ec in end_conns])
+            end_flag = False
+            start_flag = False
 
-                # Get weights
-                start_weights = np.array([self._conn[int(i)].weight for i in start_conns])
-                end_weights = np.array([self._conn[int(i)].weight for i in end_conns])
-                end_flag = False
-                start_flag = False
-
-                # Process start weights
-                if np.any(np.isnan(start_weights)):
+            # Process start weights
+            if np.any(np.isnan(start_weights)):
+                weight1 = np.nan
+            else:
+                if len(start_weights) == 1:
+                    start_flag = True
+                    weight1 = start_weights[0]
+                elif len(start_weights) > 0:
+                    tmp1 = max(start_weights) ** 2 - min(start_weights) ** 2
+                    tmp2 = max(start_weights) ** 2 + min(start_weights) ** 2
+                    weight1 = np.sqrt(np.random.random() * (tmp2 - tmp1) + tmp1)
+                else:
                     weight1 = np.nan
-                else:
-                    if len(start_weights) == 1:
-                        start_flag = True
-                        weight1 = start_weights[0]
-                    else:
-                        tmp1 = max(start_weights) ** 2 - min(start_weights) ** 2
-                        tmp2 = max(start_weights) ** 2 + min(start_weights) ** 2
-                        weight1 = np.sqrt(np.random.random() * (tmp2 - tmp1) + tmp1)
 
-                # Process end weights
-                if np.any(np.isnan(end_weights)):
+            # Process end weights
+            if np.any(np.isnan(end_weights)):
+                weight2 = np.nan
+            else:
+                if len(end_weights) == 1:
+                    end_flag = True
+                    weight2 = end_weights[0]
+                elif len(end_weights) > 0:
+                    tmp1 = max(end_weights) ** 2 - min(end_weights) ** 2
+                    tmp2 = max(end_weights) ** 2 + min(end_weights) ** 2
+                    weight2 = np.sqrt(np.random.random() * (tmp2 - tmp1) + tmp1)
+                else:
                     weight2 = np.nan
-                else:
-                    if len(end_weights) == 1:
-                        end_flag = True
-                        weight2 = end_weights[0]
-                    else:
-                        tmp1 = max(end_weights) ** 2 - min(end_weights) ** 2
-                        tmp2 = max(end_weights) ** 2 + min(end_weights) ** 2
-                        weight2 = np.sqrt(np.random.random() * (tmp2 - tmp1) + tmp1)
 
-                # Calculate final weight
-                if np.isnan(weight1):
-                    if np.isnan(weight2):
-                        conn_weight = max(
-                            1,
-                            np.random.normal(
-                                self.vasc_params._ves_size[2], self.vasc_params._ves_size[3]
-                            ),
-                        )
-                    else:
-                        conn_weight = weight2
-                else:
-                    if np.isnan(weight2):
-                        conn_weight = weight1
-                    else:
-                        if start_flag:
-                            conn_weight = weight1
-                        elif end_flag:
-                            conn_weight = weight2
-                        else:
-                            conn_weight = (weight1 + weight2) / 2
-
-                self._conn[curr_conn].weight = conn_weight
-
-                # Add new connections to process
-                to_connect = np.concatenate(
-                    (
-                        to_connect,
-                        end_conns[np.isnan(end_weights)],
-                        start_conns[np.isnan(start_weights)],
+            # Calculate final weight
+            if np.isnan(weight1):
+                if np.isnan(weight2):
+                    conn_weight = max(
+                        1,
+                        np.random.normal(self.vasc_params._ves_size[2], self.vasc_params._ves_size[3]),
                     )
-                )
+                else:
+                    conn_weight = weight2
+            else:
+                if np.isnan(weight2):
+                    conn_weight = weight1
+                else:
+                    if start_flag:
+                        conn_weight = weight1
+                    elif end_flag:
+                        conn_weight = weight2
+                    else:
+                        conn_weight = (weight1 + weight2) / 2
 
-            to_connect = to_connect[1:]
+            self._conn[curr_conn].weight = conn_weight
+
+            # Add new connections to process
+            new_conns = []
+            for ec in end_conns:
+                if ec < len(self._conn) and np.isnan(self._conn[ec].weight):
+                    new_conns.append(ec)
+            
+            for sc in start_conns:
+                if sc < len(self._conn) and np.isnan(self._conn[sc].weight):
+                    new_conns.append(sc)
+                    
+            to_connect = to_connect[1:] + new_conns
 
         print("Done weight processing")
 
         # Set remaining weights
         for i in range(self.vasc_params._nconn):
-            if self._conn[i].weight is None or np.isnan(self._conn[i].weight):
+            if i < len(self._conn) and (self._conn[i].weight is None or np.isnan(self._conn[i].weight)):
                 self._conn[i].weight = max(
                     1,
                     np.random.normal(self.vasc_params._ves_size[2], self.vasc_params._ves_size[3]),

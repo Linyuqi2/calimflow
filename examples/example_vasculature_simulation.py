@@ -16,7 +16,7 @@ def test_vasculature_simulator():
     # Initialize parameters
     vol_params = VolumeParams(size=np.array([50, 50, 30]), res=2, depth=100, verbose=1)
     vasc_params = VascParams(
-        ves_freq=np.array([20, 10, 5]), source_freq=100, ves_size=np.array([6, 3, 1])
+        ves_freq=np.array([20, 10, 10]), source_freq=100, ves_size=np.array([6, 3, 1])
     )
 
     # Create vas_simulator and run simulation

@@ -6,7 +6,7 @@ from scipy.interpolate import CubicSpline
 import copy
 
 from ..models.parameters import (
-    VolumeParams, NeuronParams, DendriteParams, NeuralVolume, NeuronBody
+    VolumeParams, NeuronParams, DendriteParams, NeuralVolume, NeuronBody, 
 )
 from ..utils.geometry import (
     rotation_matrix,
@@ -2164,7 +2164,7 @@ class NeuronSimulator:
             # Assign values
             values[soma_indices] = soma_values
         
-        # Calculate values for dendrite points
+        # Calculate values for dendrite point
         if len(dend_points) > 0:
             # Calculate distance from soma center
             dend_distances = np.sqrt(np.sum((dend_points - neuron_loc)**2, axis=1))

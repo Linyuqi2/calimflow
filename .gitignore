@@ -6,3 +6,4 @@ visualization/data/*.json
 visualization/images/*.png
 examples/*
 tests/notebooks/*.ipynb
+simulation_results/*

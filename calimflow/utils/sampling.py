@@ -1,5 +1,5 @@
 import numpy as np
-from typing import Tuple, Optional
+from typing import Tuple, Optional, Union
 from scipy import ndimage
 
 def correct_offset_round_error(
@@ -183,3 +183,104 @@ def pseudo_rand_sample_3d(
             i += 1
             
     return pos, pdf
+
+def sample_random_location(
+    vol_size: Union[np.ndarray, Tuple[int, int, int]],
+    n_samples: int,
+    min_dist: float,
+    excluded_regions: Optional[np.ndarray] = None,
+    weights: Optional[np.ndarray] = None
+) -> np.ndarray:
+    """
+    Sample random locations in a volume with minimum distance constraints.
+
+    Args:
+        vol_size: Size of volume (3D array)
+        n_samples: Number of locations to sample
+        min_dist: Minimum distance between samples
+        excluded_regions: Binary array indicating forbidden regions (same size as volume)
+        weights: Weight map for biasing sample locations (same size as volume)
+
+    Returns:
+        locations: Array of sampled locations (n_samples x 3)
+    """
+    # Convert inputs to numpy arrays
+    vol_size = np.asarray(vol_size)
+    
+    # Initialize masks
+    if excluded_regions is None:
+        valid_mask = np.ones(vol_size, dtype=bool)
+    else:
+        valid_mask = ~excluded_regions
+        
+    # Initialize weights
+    if weights is None:
+        weights = np.ones(vol_size)
+    weights = weights * valid_mask
+    if weights.sum() > 0:
+        weights = weights / weights.sum()
+    
+    # Initialize output
+    locations = []
+    
+    # Create exclusion kernel
+    x, y, z = np.meshgrid(
+        np.arange(-min_dist, min_dist + 1),
+        np.arange(-min_dist, min_dist + 1),
+        np.arange(-min_dist, min_dist + 1)
+    )
+    exclusion_kernel = (x**2 + y**2 + z**2) <= min_dist**2
+    
+    while len(locations) < n_samples and np.any(valid_mask):
+        # Get valid indices and their probabilities
+        valid_indices = np.where(valid_mask)
+        if len(valid_indices[0]) == 0:
+            break
+            
+        # Calculate sampling probabilities
+        probs = weights[valid_mask]
+        if probs.sum() > 0:
+            probs = probs / probs.sum()
+            
+        # Sample location
+        idx = np.random.choice(len(probs), p=probs)
+        loc = np.array([
+            valid_indices[0][idx],
+            valid_indices[1][idx],
+            valid_indices[2][idx]
+        ])
+        
+        # Add location
+        locations.append(loc)
+        
+        # Update exclusion zone
+        x_start = max(0, loc[0] - min_dist)
+        x_end = min(vol_size[0], loc[0] + min_dist + 1)
+        y_start = max(0, loc[1] - min_dist)
+        y_end = min(vol_size[1], loc[1] + min_dist + 1)
+        z_start = max(0, loc[2] - min_dist)
+        z_end = min(vol_size[2], loc[2] + min_dist + 1)
+        
+        k_x_start = max(0, min_dist - loc[0])
+        k_y_start = max(0, min_dist - loc[1])
+        k_z_start = max(0, min_dist - loc[2])
+        
+        k_x_end = min(2*min_dist + 1, min_dist + vol_size[0] - loc[0])
+        k_y_end = min(2*min_dist + 1, min_dist + vol_size[1] - loc[1])
+        k_z_end = min(2*min_dist + 1, min_dist + vol_size[2] - loc[2])
+        
+        valid_mask[x_start:x_end, y_start:y_end, z_start:z_end] &= ~exclusion_kernel[
+            k_x_start:k_x_end,
+            k_y_start:k_y_end,
+            k_z_start:k_z_end
+        ]
+        
+        # Update weights
+        weights = weights * valid_mask
+        if weights.sum() > 0:
+            weights = weights / weights.sum()
+    
+    if not locations:
+        return np.zeros((0, 3))
+        
+    return np.array(locations)
