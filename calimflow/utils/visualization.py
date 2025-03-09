@@ -4,6 +4,7 @@ from mpl_toolkits.mplot3d import Axes3D
 import matplotlib.cm as cm
 from scipy import ndimage
 import os
+from typing import Optional, Tuple
 
 def plot_3d_volume(neural_soma, neural_volume=None, save_path=None, show=True, 
                   threshold=0.1, alpha_scale=0.8, elev=20, azim=45, figsize=(12, 10)):
@@ -347,3 +348,129 @@ def plot_volume_slices(volume, title="Volume Slices", cmap='viridis',
         plt.close()
     
     return fig
+
+def plot_dendrite_growth(
+    neur_soma: np.ndarray,
+    neur_num: np.ndarray,
+    save_path: Optional[str] = None,
+    show: bool = True,
+    title: str = "Dendrite Growth Visualization",
+    figsize: Tuple[int, int] = (15, 5)
+) -> None:
+    """
+    Visualize dendrite growth by comparing soma and final neural volume.
+    Shows three views: original soma, grown dendrites, and overlay.
+    
+    Args:
+        neur_soma: Array containing soma locations (neuron indices)
+        neur_num: Array containing grown dendrites (neuron indices)
+        save_path: Path to save visualization
+        show: Whether to display plot
+        title: Plot title
+        figsize: Figure size (width, height)
+    """
+    fig, axes = plt.subplots(1, 3, figsize=figsize)
+    fig.suptitle(title, fontsize=16)
+    
+    # Get central slice for visualization
+    z_mid = neur_soma.shape[2] // 2
+    
+    # Plot original soma
+    axes[0].imshow(neur_soma[:, :, z_mid].T, cmap='tab20')
+    axes[0].set_title('Original Soma')
+    axes[0].set_xlabel('X')
+    axes[0].set_ylabel('Y')
+    
+    # Plot grown dendrites
+    axes[1].imshow(neur_num[:, :, z_mid].T, cmap='tab20')
+    axes[1].set_title('With Dendrites')
+    axes[1].set_xlabel('X')
+    axes[1].set_ylabel('Y')
+    
+    # Create overlay
+    overlay = np.zeros_like(neur_num[:, :, z_mid], dtype=float)
+    overlay[neur_soma[:, :, z_mid] > 0] = 1  # Soma in red
+    overlay[neur_num[:, :, z_mid] > 0] = 2   # Dendrites in blue
+    
+    # Plot overlay
+    axes[2].imshow(overlay.T, cmap='brg', vmin=0, vmax=2)
+    axes[2].set_title('Overlay\n(Red: Soma, Blue: Dendrites)')
+    axes[2].set_xlabel('X')
+    axes[2].set_ylabel('Y')
+    
+    plt.tight_layout()
+    
+    if save_path:
+        plt.savefig(save_path, dpi=150, bbox_inches='tight')
+        print(f"Visualization saved to {save_path}")
+    
+    if show:
+        plt.show()
+    else:
+        plt.close()
+
+def plot_dendrite_3d(
+    neur_soma: np.ndarray,
+    neur_num: np.ndarray,
+    save_path: Optional[str] = None,
+    show: bool = True,
+    elev: float = 20,
+    azim: float = 45,
+    figsize: Tuple[int, int] = (10, 10)
+) -> None:
+    """
+    Create 3D visualization of dendrite growth.
+    
+    Args:
+        neur_soma: Array containing soma locations
+        neur_num: Array containing grown dendrites
+        save_path: Path to save visualization
+        show: Whether to display plot
+        elev: Elevation angle for 3D view
+        azim: Azimuth angle for 3D view
+        figsize: Figure size
+    """
+    fig = plt.figure(figsize=figsize)
+    ax = fig.add_subplot(111, projection='3d')
+    
+    # Get coordinates for soma and dendrites
+    soma_coords = np.where(neur_soma > 0)
+    dend_coords = np.where((neur_num > 0) & (neur_soma == 0))  # Dendrites only
+    
+    # Plot soma
+    if len(soma_coords[0]) > 0:
+        soma_colors = plt.cm.tab20(neur_soma[soma_coords] % 20 / 20)
+        ax.scatter(
+            soma_coords[0], soma_coords[1], soma_coords[2],
+            c=soma_colors, marker='o', s=50, label='Soma'
+        )
+    
+    # Plot dendrites
+    if len(dend_coords[0]) > 0:
+        # Downsample if too many points
+        if len(dend_coords[0]) > 10000:
+            idx = np.random.choice(len(dend_coords[0]), 10000, replace=False)
+            dend_coords = tuple(c[idx] for c in dend_coords)
+        
+        dend_colors = plt.cm.tab20(neur_num[dend_coords] % 20 / 20)
+        ax.scatter(
+            dend_coords[0], dend_coords[1], dend_coords[2],
+            c=dend_colors, marker='.', s=1, alpha=0.5, label='Dendrites'
+        )
+    
+    ax.set_title('3D Dendrite Growth Visualization')
+    ax.set_xlabel('X')
+    ax.set_ylabel('Y')
+    ax.set_zlabel('Z')
+    
+    # Set view angle
+    ax.view_init(elev=elev, azim=azim)
+    
+    if save_path:
+        plt.savefig(save_path, dpi=150, bbox_inches='tight')
+        print(f"3D visualization saved to {save_path}")
+    
+    if show:
+        plt.show()
+    else:
+        plt.close()

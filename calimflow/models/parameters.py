@@ -138,14 +138,34 @@ class NeuronParams:
 @dataclass
 class DendriteParams:
     """Parameters for dendrite generation."""
-    dt_params: np.ndarray = field(default_factory=lambda: np.array([40, 150, 50, 1, 10]))  # [num_trees, radius_xy, radius_z, width_scale, variation]
-    at_params: np.ndarray = field(default_factory=lambda: np.array([1, 5, 2, 2, 4]))  # [num_apical, radius_xy, radius_z, offset]
-    d_weight: float = 10.0  # Weight for path planning randomness
-    b_weight: float = 50.0  # Weight for obstruction
-    thickness_scale: float = 0.75  # Scaling for dendrite thickness
-    dims: np.ndarray = field(default_factory=lambda: np.array([20, 20, 20]))  # Dimensions for sampling
-    dims_ss: np.ndarray = field(default_factory=lambda: np.array([10, 10, 10]))  # Subsampling dimensions
+    # Default parameters matched with MATLAB implementation
+    dt_params: np.ndarray = field(default_factory=lambda: np.array([40, 150, 50, 1, 10]))  # dendritic tree [number, radius_xy, radius_z, width_scale, variation]
+    at_params: np.ndarray = field(default_factory=lambda: np.array([6, 5, 5, 5, 1]))  # L2/3 apical [number, radius_xy, radius_z, offset, scale]
+    at_params2: np.ndarray = field(default_factory=lambda: np.array([1, 5, 5, 5, 4]))  # L5 apical [number, radius_xy, radius_z, offset, scale]
+    dweight: float = 10.0  # Weight for path planning randomness
+    bweight: float = 5.0  # Weight for obstruction (changed from 50 to 5 to match MATLAB)
+    thickness_scale: float = 0.5  # Scaling for dendrite thickness in um^2
+    dims: np.ndarray = field(default_factory=lambda: np.array([60, 60, 60]))  # Dimensions at 10um per space
+    dims_ss: np.ndarray = field(default_factory=lambda: np.array([5, 5, 5]))  # Subsampling factor (changed from 10 to 5)
     rall_exp: float = 1.5  # Rall exponent for branching
+    weight_scale: np.ndarray = field(default_factory=lambda: np.array([150, 1.0, 0.8]))  # [distance scaling, weight, variation]
+    dend_var: float = 0.25  # Dendrite variation parameter
+
+    def __post_init__(self):
+        """Validate parameters after initialization."""
+        # Convert lists to numpy arrays if needed
+        if not isinstance(self.dt_params, np.ndarray):
+            self.dt_params = np.array(self.dt_params)
+        if not isinstance(self.at_params, np.ndarray):
+            self.at_params = np.array(self.at_params)
+        if not isinstance(self.at_params2, np.ndarray):
+            self.at_params2 = np.array(self.at_params2)
+        if not isinstance(self.dims, np.ndarray):
+            self.dims = np.array(self.dims)
+        if not isinstance(self.dims_ss, np.ndarray):
+            self.dims_ss = np.array(self.dims_ss)
+        if not isinstance(self.weight_scale, np.ndarray):
+            self.weight_scale = np.array(self.weight_scale)
 
 @dataclass
 class NeuronBody:
