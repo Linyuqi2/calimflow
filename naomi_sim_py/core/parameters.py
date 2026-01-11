@@ -417,3 +417,149 @@ def check_tpm_params(tpm_params: Optional[Dict[str, Any]] = None) -> Dict[str, A
     
     return tpm_params
 
+
+def check_neur_params(neur_params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """
+    Check and set default values for neuron generation parameters.
+
+    This function replicates the MATLAB check_neur_params.m logic.
+
+    Args:
+        neur_params: User-provided neuron parameters (can be None or partial)
+
+    Returns:
+        Complete neuron parameters dictionary with all required fields
+    """
+    # Initialize empty dict if None
+    if neur_params is None:
+        neur_params = {}
+
+    # Define default parameters (matching MATLAB check_neur_params.m)
+    d_params = {
+        'n_samps': 1000,                # Number of sphere samples
+        'l_scale': 105.0,               # Length-scale for GP bumpiness
+        'p_scale': 95.0,                # Variance for GP shape
+        'avg_rad': 5.5,                 # Average neuron radius (um)
+        'nuc_fluorsc': 0.3,             # Nuclear fluorescence
+        'min_thic': np.array([1.0, 1.0]), # Minimum cytoplasmic thickness [soma, nucleus]
+        'eccen': 0.25,                  # Maximum eccentricity
+        'exts': np.array([0.75, 1.7]),  # Radius bounds [min, max]
+        'nexts': np.array([60.0, 20.0]), # Nuclear shrink/smooth params
+        'neur_type': 'pyr',             # Neuron type ('pyr' or 'peanut')
+        'nuc_rad': None,                # Nuclear radius scaling (optional)
+        'max_ang': 20.0,                # Maximum rotation angle
+        'fluor_dist': np.array([1.0, 0.2]),  # Fluorescence distribution [length_scale, variance]
+    }
+
+    # Merge defaults with user parameters
+    neur_params = set_params(d_params, neur_params)
+
+    # Ensure array parameters are numpy arrays
+    for key in ['min_thic', 'exts', 'nexts']:
+        if neur_params[key] is not None and not isinstance(neur_params[key], np.ndarray):
+            neur_params[key] = np.array(neur_params[key])
+
+    return neur_params
+
+
+def check_dend_params(dend_params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """
+    Check and set default values for dendrite generation parameters.
+
+    This function replicates the MATLAB check_dend_params.m logic.
+
+    Args:
+        dend_params: User-provided dendrite parameters (can be None or partial)
+
+    Returns:
+        Complete dendrite parameters dictionary with all required fields
+    """
+    # Initialize empty dict if None
+    if dend_params is None:
+        dend_params = {}
+
+    # Define default parameters (matching MATLAB check_dend_params.m)
+    d_params = {
+        'dtParams': np.array([35.0, 100.0, 50.0, 1.0, 10.0]),  # Dendritic tree params
+        'atParams': np.array([1.0, 5.0, 2.0, 2.0, 4.0]),       # Apical dendrite params
+        'dweight': 10.0,                # Path planning randomness weight
+        'bweight': 50.0,                # Obstruction avoidance weight
+        'thicknessScale': 0.75,         # Thickness scaling
+        'dims': np.array([20.0, 20.0, 20.0]),        # Spatial dimensions
+        'dimsSS': np.array([10.0, 10.0, 10.0]),      # Subsampling factors
+        'rallexp': 2.0,                 # Relaxation exponent
+        'weightScale': np.array([150.0, 1.0, 0.8]), # Fluorescence weights [distance_scale, weight, variation]
+    }
+
+    # Merge defaults with user parameters
+    dend_params = set_params(d_params, dend_params)
+
+    # Ensure array parameters are numpy arrays
+    for key in ['dtParams', 'atParams', 'dims', 'dimsSS']:
+        if dend_params[key] is not None and not isinstance(dend_params[key], np.ndarray):
+            dend_params[key] = np.array(dend_params[key])
+
+    return dend_params
+
+
+def check_bg_params(bg_params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """
+    Check and set default values for background generation parameters.
+
+    This function replicates the MATLAB check_bg_params.m logic.
+
+    Args:
+        bg_params: User-provided background parameters (can be None or partial)
+
+    Returns:
+        Complete background parameters dictionary with all required fields
+    """
+    # Initialize empty dict if None
+    if bg_params is None:
+        bg_params = {}
+
+    # Define default parameters (matching MATLAB check_bg_params.m)
+    d_params = {
+        'flag': 1,                      # Enable/disable background generation
+        'distvar': 5.0,                 # Distance variation
+        'distscale': 2.0,               # Distance scaling
+        'nanchors': 5,                  # Number of anchor points
+        'numptssc': 20,                 # Points scaling factor
+    }
+
+    # Merge defaults with user parameters
+    bg_params = set_params(d_params, bg_params)
+
+    return bg_params
+
+
+def check_axon_params(axon_params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """
+    Check and set default values for axon generation parameters.
+
+    This function replicates the MATLAB check_axon_params.m logic.
+
+    Args:
+        axon_params: User-provided axon parameters (can be None or partial)
+
+    Returns:
+        Complete axon parameters dictionary with all required fields
+    """
+    # Initialize empty dict if None
+    if axon_params is None:
+        axon_params = {}
+
+    # Define default parameters (matching MATLAB check_axon_params.m)
+    d_params = {
+        'flag': 0,                      # Enable/disable axon generation (default disabled)
+        'distvar': 5.0,                 # Distance variation
+        'distscale': 2.0,               # Distance scaling
+        'nanchors': 5,                  # Number of anchor points
+        'numptssc': 20,                 # Points scaling factor
+    }
+
+    # Merge defaults with user parameters
+    axon_params = set_params(d_params, axon_params)
+
+    return axon_params
+

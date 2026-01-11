@@ -1,1 +1,96 @@
-{"vol_params":{"vol_sz":[400,400,100],"vol_depth":280,"vasc_sz":[400,400,380]},"vasc_params":{"flag":1,"ves_shift":[5,15,5],"depth_vasc":200,"depth_surf":15,"distWeightScale":2,"randWeightScale":0.1,"cappAmpScale":0.5,"cappAmpZscale":0.5,"vesSize":[15,9,2],"vesFreq":[125,200,50],"sourceFreq":1000,"vesNumScale":0.2,"sepweight":0.75,"distsc":4,"node_params":{"maxit":25,"lensc":50,"varsc":15,"mindist":10,"varpos":5,"dirvar":0.39269908169872414,"branchp":0.02,"vesrad":25}}}
+{
+    "vol_params": {
+    "vol_sz": [100, 100, 40],
+    "vol_depth": 100,
+    "vasc_sz": [100, 100, 140],
+    "min_dist": 12,
+    "N_neur": 8,
+    "N_den": 10,
+    "vres": 2,
+    "N_bg": 20000,
+    "dendrite_tau": 5,
+    "verbose": 1
+  },
+  "neur_params": {
+    "n_samps": 200,
+    "l_scale": 90,
+    "p_scale": 1000,
+    "avg_rad": 5.9,
+    "nuc_fluorsc": 0,
+    "min_thic": [0.4, 0.4],
+    "eccen": [0.35, 0.35, 0.5],
+    "exts": [0.75, 1.7],
+    "nexts": [0.5, 1],
+    "neur_type": "pyr",
+    "max_ang": 20,
+    "fluor_dist": [1, 0.2]
+  },
+  "vasc_params": {
+    "flag": 1,
+    "ves_shift": [5, 15, 5],
+    "depth_vasc": 200,
+    "depth_surf": 15,
+    "distWeightScale": 2,
+    "randWeightScale": 0.1,
+    "cappAmpScale": 0.5,
+    "cappAmpZscale": 0.5,
+    "vesSize": [15, 9, 2],
+    "vesFreq": [125, 200, 50],
+    "sourceFreq": 1000,
+    "vesNumScale": 0.2,
+    "sepweight": 0.75,
+    "distsc": 4,
+    "node_params": {
+      "maxit": 25,
+      "lensc": 50,
+      "varsc": 15,
+      "mindist": 10,
+      "varpos": 5,
+      "dirvar": 0.39269908169872414,
+      "branchp": 0.02,
+      "vesrad": 25
+    }
+  },
+  "dend_params": {
+    "dtParams": [40, 150, 50, 1, 10],
+    "atParams": [6, 5, 5, 5, 1],
+    "atParams2": [1, 5, 5, 5, 4],
+    "dweight": 10,
+    "bweight": 5,
+    "thicknessScale": 0.5,
+    "weightScale": [150, 1, 0.8],
+    "dims": [60, 60, 60],
+    "dimsSS": [5, 5, 5],
+    "rallexp": 1.5
+  },
+  "bg_params": {
+    "flag": 1,
+    "distsc": 0.5,
+    "fillweight": 100,
+    "maxlength": 200,
+    "minlength": 10,
+    "maxel": 8,
+    "numbranches": 20,
+    "varbranches": 5,
+    "maxfill": 0.7,
+    "N_proc": 50,
+    "l": 25,
+    "rho": 0.1
+  },
+  "axon_params": {
+    "flag": 1,
+    "distsc": 0.5,
+    "fillweight": 100,
+    "maxlength": 200,
+    "minlength": 10,
+    "maxdist": 100,
+    "maxel": 8,
+    "numbranches": 20,
+    "varbranches": 5,
+    "maxfill": 0.7,
+    "N_proc": 50,
+    "padsize": 10,
+    "maxvoxel": 8,
+    "varfill": 0.1
+  }
+}

@@ -10,6 +10,10 @@ from .parameters import (
     check_spike_opts,
     check_noise_params,
     check_tpm_params,
+    check_neur_params,
+    check_dend_params,
+    check_bg_params,
+    check_axon_params,
 )
 
 __all__ = [
@@ -20,5 +24,9 @@ __all__ = [
     'check_spike_opts',
     'check_noise_params',
     'check_tpm_params',
+    'check_neur_params',
+    'check_dend_params',
+    'check_bg_params',
+    'check_axon_params',
 ]
 
